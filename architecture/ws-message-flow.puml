@@ -1,0 +1,77 @@
+@startuml FX OEE WebSocket Message Flow
+!theme plain
+skinparam backgroundColor #FAFAFA
+skinparam defaultFontName Helvetica
+skinparam sequenceMessageAlign center
+
+title FX OEE — WebSocket Message Flow
+
+actor Trader
+participant "Frontend\n(ws.svelte.ts)" as fe
+participant "Vite dev server\n(proxy /ws -> :8080)" as proxy
+participant "TradingWebSocketHandler\n(/ws/trading)" as ws
+participant "MatchingEngine\n(per pair)" as me
+participant "OrderBook\n(per pair)" as ob
+
+note over fe, ob
+  No database in the request path — backend is in-memory only.
+  Postgres/Kafka are deployed but not wired in backend code.
+end note
+
+== Connection ==
+Trader -> fe : open terminal
+fe -> proxy : WS connect /ws/trading
+proxy -> ws : proxied WS connect
+ws --> fe : connection established
+
+== Subscribe to Pair ==
+Trader -> fe : select EUR/USD
+fe -> ws : {type:"SUBSCRIBE", pair:"EUR_USD"}
+ws -> ws : register session under pair
+ws -> ob : getSnapshot(depth=10)
+ob --> ws : OrderBookSnapshot
+ws --> fe : {type:"ORDERBOOK",\n payload:{pair, bids:[...], asks:[...], timestamp}}
+
+== Submit Order ==
+Trader -> fe : BUY 100k EUR/USD @ 1.0850
+fe -> ws : {type:"NEW_ORDER", pair:"EUR_USD", side:"BUY",\n orderType:"LIMIT", price:1.0850, quantity:100000,\n clientOrderId:"..."}
+ws -> me : match(order)
+activate me
+me -> ob : lock + peek/poll opposite side
+
+alt Crossing liquidity found
+    me -> ob : pollBest(opposite), fill orders
+    me --> ws : onTrade(Trade)  (listener, per trade)
+    ws --> fe : {type:"TRADE", payload:{pair, price,\n quantity, side, timestamp}}  (to all pair subs)
+end
+
+alt LIMIT remainder unfilled
+    me -> ob : addOrder(order) — rests in book
+else MARKET remainder unfilled
+    me -> me : order.reject() (no liquidity)
+end
+me --> ws : match() returns List<Trade>
+deactivate me
+
+ws --> fe : {type:"ORDER_UPDATE", payload:{id, clientOrderId,\n status, remainingQuantity, ...}}  (to originating session)
+ws -> ob : getSnapshot(depth=10)
+ws --> fe : {type:"ORDERBOOK", payload:{updated book}}  (to all pair subs)
+note over fe : Subscribers see updated book + any trades
+
+== Cancel Order ==
+Trader -> fe : cancel order
+fe -> ws : {type:"CANCEL_ORDER", orderId:"abc123"}
+ws -> ob : cancelOrder("abc123")\n(only the session's subscribed pair book)
+alt Found
+    ob --> ws : Optional<Order> (status CANCELLED)
+    ws --> fe : {type:"ORDER_UPDATE", payload:{status:"CANCELLED"}}
+    ws --> fe : {type:"ORDERBOOK", payload:{updated book}}
+else Not found
+    ws --> fe : {type:"ERROR", payload:{message:"Order not found: abc123"}}
+end
+
+== Error Case ==
+fe -> ws : malformed / invalid message
+ws --> fe : {type:"ERROR", payload:{message:"..."}}
+
+@enduml

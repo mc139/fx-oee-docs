@@ -1,0 +1,60 @@
+@startuml FX OEE System Architecture
+' Uses the PlantUML stdlib bundled C4 (offline, no network include).
+!include <C4/C4_Container>
+
+LAYOUT_WITH_LEGEND()
+
+title FX Order Execution Engine (FX OEE) — System Architecture
+
+AddRelTag("planned", $lineStyle = DashedLine(), $lineColor = "#888888")
+AddElementTag("planned", $bgColor = "#E8E8E8", $fontColor = "#666666", $borderColor = "#999999", $legendText = "Deployed but not yet wired in backend code")
+
+Person(trader, "Trader", "Uses web terminal to submit and monitor FX orders")
+
+System_Boundary(k8s, "Kubernetes — namespace: fx-oee") {
+
+    System_Boundary(ingress_layer, "Ingress (NGINX, ingressClassName: nginx)") {
+        Container(ingress, "NGINX Ingress", "Kubernetes Ingress", "Host-based routing:\nfx-oee.local/ -> frontend:5173\ngrafana.fx-oee.local/ -> grafana:3000\nprometheus.fx-oee.local/ -> prometheus:9090\nWS keepalive: proxy timeouts 3600s.\nBackend has NO public route.")
+    }
+
+    System_Boundary(app_layer, "Application") {
+        Container(frontend, "Frontend", "SvelteKit + TS, Vite dev server\nNode 24-alpine, Port 5173", "SPA trading terminal (adapter-static,\nssr=false, prerender). Components:\nOrderBook, OrderEntry, OrdersPanel,\nTradeTape, PairSelector.\nReactive WS store with auto-reconnect.\nVite proxies /ws -> backend:8080 (ws),\n/api -> backend:8080 (http).")
+
+        Container(backend, "Backend", "Spring Boot 3.5.3\nJava 21, Port 8080", "TradingWebSocketHandler (/ws/trading).\nPrice-time priority MatchingEngine.\nOne OrderBook + MatchingEngine PER PAIR\n(EnumMap; TreeMap bids/asks + HashMap idx).\nIn-memory only — no persistence wired.\nActuator health/info + Prometheus metrics.")
+    }
+
+    System_Boundary(data_layer, "Data (deployed, not yet wired)") {
+        ContainerDb(postgres, "PostgreSQL 16", "StatefulSet, 2Gi PV, Port 5432", "Datasource + Flyway configured in\napplication.yml but no migrations and\nno JOOQ/JDBC code yet.", $tags = "planned")
+
+        Container(kafka, "Kafka", "Confluent 7.6.0\nStatefulSet, Port 9092", "spring-kafka configured.\nNo producer/consumer code yet.", $tags = "planned")
+
+        Container(zookeeper, "Zookeeper", "Confluent 7.6.0, Port 2181", "Kafka coordination", $tags = "planned")
+    }
+
+    System_Boundary(observability_layer, "Observability") {
+        Container(prometheus, "Prometheus", "v2.51.0, Port 9090", "Scrapes backend:8080/actuator/prometheus\nevery 15s")
+
+        Container(grafana, "Grafana", "v10.4.0, Port 3000", "Metrics dashboards querying Prometheus")
+    }
+}
+
+' User + ingress flows
+Rel(trader, ingress, "HTTP / WebSocket", "HTTP(S) / WS")
+Rel(ingress, frontend, "Routes fx-oee.local", "HTTP Port 5173")
+Rel(ingress, grafana, "Routes grafana.fx-oee.local", "HTTP Port 3000")
+Rel(ingress, prometheus, "Routes prometheus.fx-oee.local", "HTTP Port 9090")
+
+' App flows — frontend dev server is the only path to the backend
+Rel(frontend, backend, "Proxies /ws (NEW_ORDER, CANCEL_ORDER,\nSUBSCRIBE, UNSUBSCRIBE) and /api", "WebSocket / HTTP Port 8080")
+Rel(backend, frontend, "ORDERBOOK, TRADE,\nORDER_UPDATE, ERROR", "WS broadcast")
+
+' Data flows — configured but no backend code yet
+Rel(backend, postgres, "JDBC + Flyway (configured,\nno code/migrations)", "Port 5432", $tags = "planned")
+Rel(backend, kafka, "Execution events (planned)", "Port 9092", $tags = "planned")
+Rel(kafka, zookeeper, "Coordination", "Port 2181", $tags = "planned")
+
+' Observability flows
+Rel(prometheus, backend, "Scrape metrics", "HTTP /actuator/prometheus")
+Rel(grafana, prometheus, "Query metrics", "PromQL")
+
+@enduml

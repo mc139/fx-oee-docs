@@ -1,0 +1,165 @@
+@startuml FX OEE Matching Engine
+!theme plain
+skinparam backgroundColor #FAFAFA
+skinparam defaultFontName Helvetica
+
+title FX OEE — Matching Engine & Domain Model
+
+package "WebSocket Layer" {
+    class "TradingWebSocketHandler" as ws <<component>> {
+        +afterConnectionEstablished(session)
+        +handleTextMessage(session, msg)
+        +afterConnectionClosed(session)
+    }
+    note bottom of ws
+        Raw Spring TextWebSocketHandler at /ws/trading.
+        Holds one OrderBook + one MatchingEngine PER PAIR
+        in EnumMap<CurrencyPair, ...>. No persistence.
+        Client -> Server JSON:
+          SUBSCRIBE / UNSUBSCRIBE { pair }
+          NEW_ORDER { pair, side, orderType, price,
+                      quantity, clientOrderId }
+          CANCEL_ORDER { orderId }
+        Server -> Server (broadcast to pair subscribers):
+          ORDERBOOK / TRADE / ORDER_UPDATE / ERROR
+    end note
+}
+
+package "Matching Core" {
+    class "MatchingEngine" as me <<component>> {
+        +MatchingEngine(orderBook)
+        +addListener(MatchEventListener)
+        +match(Order) : List<Trade>
+    }
+    note bottom of me
+        One instance per pair (built with its OrderBook).
+        Price-time priority; LIMIT and MARKET orders.
+        match() runs under the OrderBook lock.
+        LIMIT remainder -> rests in book.
+        MARKET remainder -> reject() (no liquidity).
+        Notifies MatchEventListener.onTrade per trade.
+        (LMAX Disruptor dependency present, not yet used.)
+    end note
+
+    class "OrderBook" as ob <<component>> {
+        +addOrder(Order)
+        +cancelOrder(orderId) : Optional<Order>
+        +peekBestBid() / peekBestAsk()
+        +pollBestBid() / pollBestAsk()
+        +getBestBid() / getBestAsk()
+        +hasMatch() : boolean
+        +getSnapshot(depth) : OrderBookSnapshot
+        +getLock() : ReentrantLock
+    }
+    note bottom of ob
+        One instance per CurrencyPair.
+        bids: TreeMap<BigDecimal,Queue<Order>> (reverseOrder)
+        asks: TreeMap<BigDecimal,Queue<Order>> (natural)
+        orderIndex: HashMap<String,Order> (O(1) cancel)
+        ReentrantLock guards all read/write.
+    end note
+
+    interface "MatchEventListener" as listener {
+        +onTrade(Trade)
+    }
+}
+
+package "Domain Model" {
+    class "Order" as Order {
+        +String id
+        +String clientOrderId
+        +CurrencyPair pair
+        +OrderSide side
+        +OrderType type
+        +BigDecimal price
+        +BigDecimal quantity
+        +BigDecimal remainingQuantity
+        +OrderStatus status
+        +Instant timestamp
+        --
+        +isBuy() : boolean
+        +isMarket() : boolean
+        +isActive() : boolean
+        +markPending()
+        +fill(qty, price)
+        +cancel()
+        +reject()
+    }
+    note right of Order : price is null for MARKET orders
+
+    class "Trade" as Trade {
+        +String id
+        +String buyOrderId
+        +String sellOrderId
+        +BigDecimal price
+        +BigDecimal quantity
+        +Instant timestamp
+    }
+
+    class "OrderBookSnapshot" as Snapshot {
+        +CurrencyPair pair
+        +List<PriceLevel> bids
+        +List<PriceLevel> asks
+    }
+    note right of Snapshot : returned by OrderBook.getSnapshot()
+
+    class "ExecutionReport" as ER {
+        +Order order
+        +List<Trade> trades
+        +BigDecimal lastFillPrice
+        +BigDecimal lastFillQty
+        --
+        {static} +fromOrder(order, trades)
+        {static} +rejected(order, reason)
+    }
+    note right of ER : domain model only —\nnot emitted in current flow
+
+    enum CurrencyPair {
+        EUR_USD
+        GBP_USD
+        USD_JPY
+        USD_CHF
+        AUD_USD
+        USD_CAD
+        NZD_USD
+        EUR_GBP
+        EUR_JPY
+        GBP_JPY
+    }
+
+    enum OrderSide {
+        BUY
+        SELL
+    }
+
+    enum OrderType {
+        LIMIT
+        MARKET
+    }
+
+    enum OrderStatus {
+        NEW
+        PENDING
+        PARTIALLY_FILLED
+        FILLED
+        CANCELLED
+        REJECTED
+    }
+}
+
+' Relationships
+ws --> me : match(order)
+ws --> ob : cancelOrder / getSnapshot
+ws ..|> listener : registers lambda\n(broadcast TRADE)
+me --> ob : peekBest / pollBest / addOrder / lock
+me ..> listener : onTrade(trade)
+me ..> Trade : creates
+ob ..> Snapshot : getSnapshot()
+Order --> CurrencyPair
+Order --> OrderSide
+Order --> OrderType
+Order --> OrderStatus
+ER o-- Order
+ER o-- "0..*" Trade
+
+@enduml
