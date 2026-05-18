@@ -11,6 +11,13 @@ Quick command list for local development.
 - `kubectl rollout restart statefulset/kafka -n fx-oee` — Performs rolling restart of Kafka StatefulSet in fx-oee namespace.
 - `kubectl apply -f k8s/frontend/deployment.yaml` — Applies the frontend Deployment manifest to the current Kubernetes context.
 
+## Podman on macOS — Prerequisites
+
+When running Minikube with Podman on macOS, two things must be in place or services won't resolve:
+
+1. `/etc/hosts` must map `127.0.0.1` to your service hostnames.
+2. `minikube tunnel` must be running in a separate terminal — this exposes LoadBalancer services to localhost.
+
 ## Minikube
 
 - `minikube start --cpus=4 --memory=8192 --driver=docker` — Starts Minikube with 4 CPUs and 8 GB RAM (minimum recommended for Kafka + full stack).
