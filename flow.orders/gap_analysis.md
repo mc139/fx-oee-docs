@@ -30,8 +30,8 @@ Each row: ✅ done · ⚠️ partial · ❌ missing.
 | Account DB | available balance updated · reserved→0 | ⚠️ | In-memory only; no DB; no concurrency protection |
 | **Position Service** — exposure · long/short · avg entry | ✅ | `AccountService` tracks individual lots, FIFO close, avg entry price, realized PnL |
 | Position DB | open position · realized P&L on close | ⚠️ | In-memory; realized PnL only on lot-close path, not ordinary `applyFill()` close |
-| **Notification Service** — WebSocket push | ✅ | `broadcastAccountUpdate()` → `ACCOUNT_UPDATE` WS message → frontend store |
-| Client UI update | balance + position refreshed | ✅ | `ws.svelte.ts` handles `ACCOUNT_UPDATE`, updates all reactive state |
+| **Notification Service** — WebSocket push | ✅ | `broadcastAccountUpdate()` → `ACCOUNT_UPDATE` WS message → frontend |
+| Client UI update | balance + position refreshed | ✅ | `LiveAdapter` handles `ACCOUNT_UPDATE`, updates React state |
 | Order status → FILLED · audit log | ⚠️ | Status set; no audit log |
 
 ---
@@ -65,5 +65,5 @@ Each row: ✅ done · ⚠️ partial · ❌ missing.
 | Account/Position | `src/main/java/com/fxoee/account/AccountService.java` |
 | WS Entry Point | `src/main/java/com/fxoee/api/websocket/TradingWebSocketHandler.java` |
 | Order Model | `src/main/java/com/fxoee/domain/model/Order.java` |
-| Frontend Store | `frontend/src/lib/stores/ws.svelte.ts` |
-| Order Entry UI | `frontend/src/lib/components/OrderEntry.svelte` |
+| Frontend WS | `frontend/src/simulator.jsx` (LiveAdapter) |
+| Order Entry UI | `frontend/src/orderentry.jsx` |

@@ -5,8 +5,8 @@ reasoning behind non-obvious decisions, and a troubleshooting playbook for the
 problems you are most likely to hit on Minikube.
 
 Docker Compose is **unchanged** — `docker-compose.yml`, `Dockerfile.backend`,
-`frontend/Dockerfile` and `.env` all still work exactly as before. The
-Kubernetes setup lives entirely under `k8s/` and is purely additive.
+and `.env` all still work exactly as before. The Kubernetes setup lives entirely
+under `k8s/` and is purely additive.
 
 ---
 
@@ -29,9 +29,6 @@ k8s/
 │   ├── secret.yaml                # DB_USER / DB_PASSWORD
 │   ├── service.yaml               # ClusterIP "backend"
 │   └── deployment.yaml            # Spring Boot, slow-start probes
-├── frontend/
-│   ├── service.yaml               # ClusterIP "frontend"
-│   └── deployment.yaml            # SvelteKit Vite dev server
 ├── observability/
 │   ├── prometheus.yaml            # ConfigMap + Deployment + Service
 │   └── grafana.yaml               # Secret + Deployment + Service
@@ -47,10 +44,9 @@ minikube start --cpus=4 --memory=8192 --driver=docker
 # 2. Ingress controller
 minikube addons enable ingress
 
-# 3. Build images INTO Minikube's docker daemon (no registry)
+# 3. Build image INTO Minikube's docker daemon (no registry)
 eval $(minikube docker-env)
 docker build -t fx-oee-backend:dev -f Dockerfile.backend .
-docker build -t fx-oee-frontend:dev frontend/
 
 # 4. Apply everything (namespace first)
 kubectl apply -f k8s/namespace.yaml
@@ -70,20 +66,14 @@ open http://fx-oee.local
 
 ## 2. Key design decisions (and why)
 
-### 2.1 Frontend is the Vite **dev server**, not nginx
+### 2.1 Frontend is served from the backend, not a separate pod
 
-The original `k8s/README.md` planned a `frontend/Dockerfile` that builds static
-assets and serves them via nginx on port 80. **The actual `frontend/Dockerfile`
-runs `npm run dev` (Vite dev server on port 5173).** The manifests match
-*reality*, not the plan:
-
-- `containerPort: 5173`, Service port `5173`, Ingress backend port `5173`.
-- The Vite dev server proxies `/api` → `backend:8080` and `/ws` →
-  `ws://backend:8080` (see `frontend/vite.config.ts`). So the **backend has no
-  Ingress route of its own** — all browser traffic enters through the frontend.
-
-If you later switch the frontend to a real production build + nginx, change the
-three port numbers and add a backend Ingress path.
+The React/Vite app in `frontend/` is built by `npm run build` (output to
+`src/main/resources/static/`). `Dockerfile.backend` includes a Node build stage
+that runs this automatically. Spring Boot serves the static files at port 8080
+alongside the API and WebSocket endpoints. There is no separate frontend
+Deployment, Service, or Ingress route — **all browser traffic enters through
+`backend:8080`**.
 
 ### 2.2 PostgreSQL uses `volumeClaimTemplates`, not a standalone PVC
 
@@ -143,7 +133,7 @@ kubectl -n fx-oee get events --sort-by=.lastTimestamp | tail -30
 
 ---
 
-### 3.1 `ErrImageNeverPull` / `ImagePullBackOff` on backend or frontend
+### 3.1 `ErrImageNeverPull` / `ImagePullBackOff` on backend
 
 **Cause:** image not present in Minikube's docker daemon. The manifests use
 `imagePullPolicy: IfNotPresent` and a local tag (`fx-oee-backend:dev`) — there
@@ -154,8 +144,7 @@ is no registry to pull from.
 eval $(minikube docker-env)          # point docker at Minikube's daemon
 docker images | grep fx-oee          # confirm images exist HERE
 docker build -t fx-oee-backend:dev -f Dockerfile.backend .
-docker build -t fx-oee-frontend:dev frontend/
-kubectl -n fx-oee rollout restart deploy/backend deploy/frontend
+kubectl -n fx-oee rollout restart deploy/backend
 ```
 The classic mistake: building in your normal shell, then `kubectl` can't see
 the image. The `eval $(minikube docker-env)` must be run in the **same shell**
@@ -163,34 +152,7 @@ as `docker build`. Undo with `eval $(minikube docker-env -u)`.
 
 ---
 
-### 3.2 "Blocked request. This host (`fx-oee.local`) is not allowed." (frontend)
-
-**Cause:** Vite's dev server rejects requests whose `Host` header it does not
-recognise. Reaching it through the Ingress host `fx-oee.local` trips this.
-
-**Fix — pick one:**
-
-1. **Allow the host in Vite** (edit `frontend/vite.config.ts`, add to the
-   `server` block):
-   ```ts
-   server: {
-     host: true,
-     allowedHosts: ['fx-oee.local', '.fx-oee.local'],
-     proxy: { /* unchanged */ }
-   }
-   ```
-   Then rebuild the frontend image (§3.1). This does **not** affect Docker
-   Compose (host there is `localhost`).
-
-2. **Skip the Ingress**, use port-forward (host becomes `localhost`):
-   ```bash
-   kubectl -n fx-oee port-forward svc/frontend 5173:5173
-   open http://localhost:5173
-   ```
-
----
-
-### 3.3 Ingress host returns 404 / connection refused
+### 3.2 Ingress host returns 404 / connection refused
 
 Checklist:
 ```bash
@@ -202,12 +164,12 @@ grep fx-oee.local /etc/hosts                  # mapped to `minikube ip`?
 ```
 On macOS with the **docker** driver, the Minikube IP is **not** directly
 routable. Either run `minikube tunnel` (separate terminal, needs sudo) **or**
-use `kubectl port-forward` (§3.2 option 2). The `/etc/hosts` entry must point at
-the value of `minikube ip`.
+use `kubectl port-forward svc/backend 8080:8080`. The `/etc/hosts` entry must
+point at the value of `minikube ip`.
 
 ---
 
-### 3.4 Backend pod `CrashLoopBackOff` or stuck `0/1 Running`
+### 3.3 Backend pod `CrashLoopBackOff` or stuck `0/1 Running`
 
 **Most common cause:** slow Maven build/startup exceeding probe windows, or DB
 / Kafka not ready yet.
@@ -228,7 +190,7 @@ kubectl -n fx-oee logs deploy/backend --previous   # last crashed instance
 
 ---
 
-### 3.5 Postgres pod won't start — "data directory not empty" / Pending
+### 3.4 Postgres pod won't start — "data directory not empty" / Pending
 
 ```bash
 kubectl -n fx-oee describe pod postgres-0
@@ -245,7 +207,7 @@ kubectl -n fx-oee get pvc
 
 ---
 
-### 3.6 Kafka `CrashLoopBackOff` / clients can't connect
+### 3.5 Kafka `CrashLoopBackOff` / clients can't connect
 
 ```bash
 kubectl -n fx-oee logs kafka-0
@@ -264,7 +226,7 @@ kubectl -n fx-oee logs zookeeper-0
 
 ---
 
-### 3.7 Prometheus shows no `fx-oee` target / target DOWN
+### 3.6 Prometheus shows no `fx-oee` target / target DOWN
 
 ```bash
 kubectl -n fx-oee port-forward svc/prometheus 9090:9090
@@ -281,7 +243,7 @@ kubectl -n fx-oee port-forward svc/prometheus 9090:9090
 
 ---
 
-### 3.8 Grafana — can't log in / no data
+### 3.7 Grafana — can't log in / no data
 
 - Default creds `admin` / `admin` (`grafana-secret`). Changed the Secret but
   still locked out? Grafana persists the admin password in its DB after first
@@ -292,7 +254,7 @@ kubectl -n fx-oee port-forward svc/prometheus 9090:9090
 
 ---
 
-### 3.9 Everything `Pending` / scheduler can't place pods
+### 3.8 Everything `Pending` / scheduler can't place pods
 
 ```bash
 kubectl -n fx-oee describe pod <pod> | grep -A5 Events
@@ -306,7 +268,7 @@ the heavy hitters.
 
 ---
 
-### 3.10 Clean reset
+### 3.9 Clean reset
 
 ```bash
 kubectl delete namespace fx-oee          # removes everything incl. PVCs
@@ -324,14 +286,13 @@ minikube delete && minikube start --cpus=4 --memory=8192 --driver=docker
 | DB persistence | `postgres_data` volume        | `volumeClaimTemplates` PVC on StatefulSet    |
 | Kafka identity | container name `kafka`        | StatefulSet pod `kafka-0` + headless svc     |
 | Service DNS    | compose network aliases       | `*.fx-oee.svc.cluster.local`                 |
-| Browser access | `localhost:5173`              | `fx-oee.local` Ingress / port-forward        |
+| Browser access | `localhost:8080`              | `fx-oee.local` Ingress / port-forward        |
 | Prometheus cfg | `docker/prometheus.yml` mount | `prometheus-config` ConfigMap                |
 | Grafana creds  | `.env` `GRAFANA_ADMIN_*`      | `grafana-secret`                             |
 
 Both paths are independent. Changing one does not affect the other unless you
-edit a shared file (`Dockerfile.backend`, `frontend/Dockerfile`,
-`frontend/vite.config.ts`, `application.yml`) — only §3.2 option 1 touches a
-shared file, and that change is compose-safe.
+edit a shared file (`Dockerfile.backend`, `application.yml`, or files under
+`frontend/`).
 
 ---
 

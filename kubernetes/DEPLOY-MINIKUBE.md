@@ -46,10 +46,10 @@ is used, so the cluster can only see images built here.
 ```bash
 eval $(minikube docker-env)
 
-docker build -t fx-oee-backend:dev  -f Dockerfile.backend .
-docker build -t fx-oee-frontend:dev frontend/
+docker build -t fx-oee-backend:dev -f Dockerfile.backend .
+# Frontend is compiled into the backend image (Node build stage in Dockerfile.backend)
 
-docker images | grep fx-oee             # confirm both tags exist
+docker images | grep fx-oee             # confirm tag exists
 ```
 
 ---
@@ -73,7 +73,7 @@ kubectl -n fx-oee get pods -w
 
 Expected order: `postgres-0` and `zookeeper-0` Ready → `kafka-0` Ready →
 `backend` Ready (slow: Maven compiles on first boot, several minutes) →
-`frontend`, `prometheus`, `grafana` Ready. Ctrl-C when all show `1/1 Running`.
+`prometheus`, `grafana` Ready. Ctrl-C when all show `1/1 Running`.
 
 Stuck? See `docs/kubernetes/TROUBLESHOOTING.md` §3.
 
@@ -101,14 +101,12 @@ open http://fx-oee.local
 open http://grafana.fx-oee.local       # admin / admin
 open http://prometheus.fx-oee.local
 ```
-If the frontend shows *"This host is not allowed"*, see TROUBLESHOOTING §3.2.
-
 **Option B — port-forward** (no tunnel, host becomes localhost):
 ```bash
-kubectl -n fx-oee port-forward svc/frontend   5173:5173 &
-kubectl -n fx-oee port-forward svc/grafana    3000:3000 &
+kubectl -n fx-oee port-forward svc/backend   8080:8080 &
+kubectl -n fx-oee port-forward svc/grafana   3000:3000 &
 kubectl -n fx-oee port-forward svc/prometheus 9090:9090 &
-open http://localhost:5173
+open http://localhost:8080
 ```
 
 ---
@@ -131,7 +129,7 @@ kubectl -n fx-oee rollout restart deploy/backend
 kubectl -n fx-oee rollout status  deploy/backend
 ```
 
-(Replace `backend` with `frontend` for frontend changes.)
+(Frontend is embedded in the backend image — rebuilding backend redeploys both.)
 
 ---
 

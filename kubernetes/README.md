@@ -44,8 +44,7 @@ cluster — only the storage class and ingress class differ.
 
 | Image | Source | Notes |
 |---|---|---|
-| `fx-oee-backend` | `Dockerfile.backend` (already exists) | Spring Boot fat jar, port 8080 |
-| `fx-oee-frontend` | New `frontend/Dockerfile` | Vite build → nginx static serve, port 80 |
+| `fx-oee-backend` | `Dockerfile.backend` (includes Node build stage) | Spring Boot fat jar + React static files, port 8080 |
 | `postgres:16` | Docker Hub | No changes |
 | `confluentinc/cp-kafka:7.6.0` | Docker Hub | No changes |
 | `confluentinc/cp-zookeeper:7.6.0` | Docker Hub | No changes |
@@ -58,8 +57,11 @@ them without a registry:
 ```bash
 eval $(minikube docker-env)
 docker build -t fx-oee-backend:dev -f Dockerfile.backend .
-docker build -t fx-oee-frontend:dev frontend/
 ```
+
+The `Dockerfile.backend` has a Node build stage that runs `npm run build` inside
+`frontend/` and copies the output to `src/main/resources/static/` before
+assembling the JAR. No separate frontend image is needed.
 
 ### 2.2 Kubernetes manifests
 
@@ -82,9 +84,6 @@ k8s/
 │   ├── service.yaml
 │   ├── configmap.yaml
 │   └── secret.yaml
-├── frontend/
-│   ├── deployment.yaml
-│   └── service.yaml
 ├── observability/
 │   ├── prometheus-configmap.yaml
 │   ├── prometheus-deployment.yaml
@@ -116,14 +115,15 @@ them up via the same `${PROPERTY}` placeholders it already uses.
                 ┌─────────────────────────────────────────────┐
                 │              Minikube Node                  │
                 │                                             │
-   browser ───► │  Ingress ──► frontend (nginx) ─┐            │
-                │                                ▼            │
-                │                          backend (Spring)   │
-                │                          │  │  │  │         │
-                │                          ▼  ▼  ▼  ▼         │
-                │                     postgres kafka          │
-                │                             │               │
-                │                          zookeeper          │
+   browser ───► │  Ingress ──► backend (Spring :8080)         │
+                │              │  React static files          │
+                │              │  REST API (/api)             │
+                │              │  WebSocket (/ws)             │
+                │              │  │  │                        │
+                │              ▼  ▼  ▼                        │
+                │         postgres kafka                      │
+                │                  │                          │
+                │             zookeeper                       │
                 │                                             │
                 │   prometheus  ◄── scrape ── all /metrics    │
                 │   grafana     ◄── query ── prometheus       │
@@ -136,8 +136,8 @@ them up via the same `${PROPERTY}` placeholders it already uses.
   `kafka-0.kafka.fx-oee.svc.cluster.local`.
 - Backend talks to Postgres via `postgres.fx-oee.svc.cluster.local:5432`.
 - Backend talks to Kafka via `kafka.fx-oee.svc.cluster.local:9092`.
-- Browser reaches frontend and backend via an `Ingress` resource, exposed on the
-  host with `minikube tunnel`.
+- Browser reaches the app via an `Ingress` resource that routes `fx-oee.local`
+  to `backend:8080`, exposed on the host with `minikube tunnel`.
 
 ### 3.3 Stateful services
 
@@ -150,9 +150,10 @@ them up via the same `${PROPERTY}` placeholders it already uses.
 
 ### 3.4 Stateless services
 
-- **Backend** and **frontend** are `Deployment`s. Pods are interchangeable, so
-  the scheduler can recreate them anywhere and rolling updates work cleanly.
+- **Backend** is a `Deployment`. Pods are interchangeable, so the scheduler can
+  recreate them anywhere and rolling updates work cleanly.
 - Backend pods are stateless because all state lives in Postgres and Kafka.
+  The React app is bundled inside the JAR, so no separate frontend pod exists.
 
 ### 3.5 Observability
 
@@ -169,7 +170,7 @@ Two options for hitting the app from the browser:
 
 1. **`minikube tunnel`** — assigns a real IP to `LoadBalancer` services. Most
    production-like.
-2. **`kubectl port-forward svc/frontend 5173:80`** — quick and dirty, no
+2. **`kubectl port-forward svc/backend 8080:8080`** — quick and dirty, no
    tunnel needed.
 
 ---
@@ -180,10 +181,9 @@ Two options for hitting the app from the browser:
 # 1. Start Minikube with enough resources for Kafka
 minikube start --cpus=4 --memory=8192 --driver=docker
 
-# 2. Build images inside the Minikube Docker daemon
+# 2. Build image inside the Minikube Docker daemon
 eval $(minikube docker-env)
 docker build -t fx-oee-backend:dev -f Dockerfile.backend .
-docker build -t fx-oee-frontend:dev frontend/
 
 # 3. Apply manifests
 kubectl apply -f k8s/namespace.yaml
