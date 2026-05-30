@@ -1,0 +1,181 @@
+@startuml FX Order Book & Matching Engine — Full Flow (v3)
+
+skinparam sequenceMessageAlign center
+skinparam responseMessageBelowArrow true
+skinparam maxMessageSize 200
+skinparam sequenceGroupBorderColor #555
+skinparam sequenceGroupBodyBackgroundColor #f9f9f9
+skinparam sequenceGroupHeaderFontStyle bold
+skinparam noteBorderColor #888
+skinparam noteBackgroundColor #fffbe6
+
+title FX Order Book & Matching Engine — Full Lifecycle (Spec v3.0)
+
+actor       Client
+participant "Pre-Trade\nValidator"   as Validator
+participant "Matching\nEngine"       as Engine
+participant "Order Book"             as Book
+participant "Position\nManager"      as PositionMgr
+participant "Margin /\nCash Ledger"  as Ledger
+participant "Event\nEmitter"         as Emitter
+participant "Kafka → DB\n(Downstream)" as Persistence
+
+== 1. ORDER SUBMISSION ==
+
+Client -> Validator : submitOrder(pair, side, type, qty, [price])
+
+group Pre-Trade Validation (Section 10)
+    Validator -> Validator : check qty > 0 && multiple of min_lot_size
+    Validator -> Validator : check pair is supported CurrencyPair
+    alt LIMIT order
+        Validator -> Validator : check price > 0 && multiple of tick_size
+    end
+
+    alt FLAT or adding to same direction
+        Validator -> Ledger : getAvailableCash()
+        Ledger --> Validator : cashBalance
+        Validator -> Validator : requiredMargin = qty × price × margin_rate\nAccept iff cashBalance ≥ requiredMargin
+    else SELL that could FLIP existing LONG (Section 10.3)
+        Validator -> Ledger : getReservedMarginOnLongLots()
+        Ledger --> Validator : releasedMargin
+        Validator -> Validator : newShortMargin = (sellQty − netLong) × limitPrice × margin_rate\nAccept iff cashBalance + releasedMargin − newShortMargin ≥ 0\n(single worst-case atomic pass)
+    else SELL reducing/closing existing LONG
+        Validator -> Validator : No new cash required\n(margin already held)
+    end
+
+    alt MARKET order BUY (Section 10.4)
+        note over Validator : No limit price → cannot pre-price.\nFunds checked per-fill during the sweep.
+    end
+
+    alt Validation FAILS
+        Validator --> Client : REJECTED (INVALID_QUANTITY | UNSUPPORTED_PAIR | INSUFFICIENT_FUNDS)
+    end
+end
+
+Validator --> Engine : order accepted → forward to Matching Engine
+
+== 2. MATCHING (Section 4) ==
+
+Engine -> Engine : acquire single-threaded lock\n(one order to completion — Section 12)
+
+Engine -> Book : getOppositeSide(order.side)
+Book --> Engine : sorted price levels (bid: high→low / ask: low→high)
+
+group Matching Loop — Price-Time Priority FIFO
+    loop while order.remainingQty > 0 AND eligible resting orders exist
+
+        Engine -> Book : peekBestRestingOrder()
+        Book --> Engine : restingOrder (price, qty, accountId, arrivalTime)
+
+        alt LIMIT order AND restingOrder.price > aggressor.limitPrice
+            note over Engine : No more eligible orders.\nExit loop.
+        end
+
+        alt MARKET order AND no liquidity left
+            Engine -> Engine : REJECT order (zero fills — Section 3.1)
+        end
+
+        '--- Self-Trade Prevention (Section 5) ---'
+        alt restingOrder.accountId == aggressor.accountId
+            note over Engine #ffdddd : STP — Cancel Newest (Q6)\nCancel aggressor's remaining qty.\nResting order untouched on book.
+            Engine -> Book : leave restingOrder intact
+            Engine --> Client : fillReport(filledQty) + cancelReport(remainingQty)
+            break
+        end
+
+        '--- Normal match ---'
+        Engine -> Engine : tradeQty = min(order.remainingQty, restingOrder.qty)\nexecutedPrice = restingOrder.price  ← maker price (Q3)
+
+        alt MARKET BUY — per-fill funds check (Section 10.4)
+            Engine -> Ledger : canAfford(tradeQty × executedPrice × margin_rate)?
+            alt insufficient funds
+                note over Engine : Stop sweep. Cancel remainder (IOC).
+                break
+            end
+        end
+
+        Engine -> Book : removeOrReduceResting(restingOrder, tradeQty)
+        Engine -> Engine : order.remainingQty -= tradeQty\nrecord Trade { tradeId, aggressorOrderId, restingOrderId,\n               qty=tradeQty, price=executedPrice, timestamp }
+
+        '--- Position update for BOTH sides ---'
+        Engine -> PositionMgr : applyFill(aggressorAccount, side, tradeQty, executedPrice)
+        Engine -> PositionMgr : applyFill(restingAccount,   oppSide, tradeQty, executedPrice)
+
+    end
+end
+
+== 3. POSITION UPDATE — FIFO NETTING (Sections 7–9) ==
+
+group applyFill(account, side, qty, price)
+    PositionMgr -> PositionMgr : netQty = Σ open lot quantities for (account, pair)
+
+    alt netQty == 0  (FLAT → open)
+        PositionMgr -> PositionMgr : openNewLot(side, qty, entryPrice=price)
+        PositionMgr -> Ledger : reserveMargin(qty × price × margin_rate)
+
+    else side == existing direction  (add to position)
+        PositionMgr -> PositionMgr : openNewLot(side, qty, entryPrice=price)\n[Each lot keeps its own entry price]
+        PositionMgr -> Ledger : reserveMargin(qty × price × margin_rate)
+
+    else side opposite AND qty < |netQty|  (partial reduce)
+        loop FIFO: oldest lot first
+            PositionMgr -> PositionMgr : closePartialOrFull(lot, qty)\nrealizedPnL += closedQty × (closePrice − entryPrice)  [LONG]\n             or closedQty × (entryPrice − closePrice)  [SHORT]
+        end
+        PositionMgr -> Ledger : releaseMargin(closedQty × entryPrice × margin_rate)\n             + creditRealizedPnL
+
+    else side opposite AND qty == |netQty|  (full close)
+        PositionMgr -> PositionMgr : FIFO-close ALL lots\naccount → FLAT
+        PositionMgr -> Ledger : releaseAllMargin + creditRealizedPnL
+
+    else side opposite AND qty > |netQty|  (FLIP — Section 9.4)
+        PositionMgr -> PositionMgr : FIFO-close ALL existing lots\n(account goes FLAT temporarily)
+        PositionMgr -> Ledger : releaseAllMargin + creditRealizedPnL
+        PositionMgr -> PositionMgr : remainingQty = qty − |netQty|\nopenNewLot(oppositeSide, remainingQty, entryPrice=price)
+        PositionMgr -> Ledger : reserveMargin(remainingQty × price × margin_rate)
+    end
+end
+
+== 4. POST-MATCH RESIDUAL HANDLING ==
+
+alt LIMIT order — residual remaining (Section 4.3)
+    Engine -> Book : addToBook(order, remainingQty, limitPrice)\n[rests at limit price, FIFO position = now]
+    note over Book : Non-crossing invariant check:\nbest_bid < best_ask  ✓
+else MARKET order — liquidity exhausted (Section 3.1 / IOC)
+    Engine -> Engine : cancelRemainder(remainingQty)\n[no error — normal IOC behaviour]
+end
+
+Engine -> Engine : release single-threaded lock
+
+== 5. REPORTING TO CLIENT ==
+
+Engine --> Client : OrderExecutionReport\n{ fills[], totalFilledQty, avgPrice,\n  restingQty (LIMIT) | cancelledQty (MARKET) }
+
+== 6. DOWNSTREAM PERSISTENCE (Section 14 — OUT OF MATCHING SCOPE) ==
+
+note over Emitter, Persistence #e8f4e8
+  Persistence is AFTER-THE-FACT playback only.
+  It does NOT influence matching, pricing, or correctness.
+  If Kafka lags or replays, the JVM state remains authoritative.
+end note
+
+Engine -> Emitter : emit(TradeEvent[])
+Engine -> Emitter : emit(PositionChangeEvent[])
+Engine -> Emitter : emit(CashMovementEvent[])
+Engine -> Emitter : emit(OrderStatusEvent[NEW→FILLED|CANCELLED|REJECTED])
+
+Emitter -> Persistence : publish to Kafka topic
+Persistence -> Persistence : persist to DB\n(replay of JVM decisions — not re-derivation)
+
+== SYSTEM INVARIANTS (Section 13 — always verifiable) ==
+
+note over Book, Ledger #f0e8ff
+  ✓ best_bid < best_ask at all times
+  ✓ Σ filled_buy_qty == Σ filled_sell_qty per pair
+  ✓ submitted_qty == filled + resting + cancelled (per order)
+  ✓ cash_balance == initial_deposit + Σ cash movements
+  ✓ No fully-closed lot reappears in FIFO iteration
+  ✓ netQty(account, pair) == Σ qty of open lots
+  ✓ NEVER LONG lot + SHORT lot simultaneously (no-hedge)
+end note
+
+@enduml
