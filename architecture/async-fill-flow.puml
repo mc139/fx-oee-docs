@@ -1,0 +1,71 @@
+@startuml async-fill-flow
+title FX-OEE — Order → Fill → Projection flow (async FillQueue + trade_events log)
+
+skinparam sequenceMessageAlign center
+skinparam maxMessageSize 220
+actor Client
+participant "OrderController\n(HTTP thread)" as HTTP
+participant "MatchingService\n(engine, in-JVM)" as MS
+queue "FillQueue\n(ConcurrentLinkedQueue)" as FQ
+participant "PersistenceWorker\n(1 daemon thread)" as PW
+database "trade_events\n(durable log)" as LOG
+queue "Kafka\nTRADES_EXECUTED" as K
+participant "FillConsumer\n(batched listener)" as FC
+database "Postgres\n(DB projection)" as DB
+participant "AccountState\n(in-mem mirror)" as MIRROR
+
+== Hot path (per order) ==
+Client -> HTTP : POST /orders
+HTTP -> MS : submit(order)
+activate MS
+note right of MS
+  Under per-pair book lock:
+   1. validate (structural)
+   2. reserve worst-case funds
+   3. engine.match() → trades
+   4. applyFills → ledger + positions
+      (ENGINE = source of truth)
+   5. reconcile locked margin
+end note
+MS -> FQ : enqueue(PendingFill)\n~1µs, wait-free
+MS --> HTTP : ExecutionReport
+deactivate MS
+HTTP --> Client : 200 OK
+note over MS, FQ #LightYellow
+  Hot path NEVER blocks on Kafka.
+  Ceiling lifts from ~200 ord/s (Kafka RTT)
+  to CPU-bound.
+end note
+
+== Off hot path (worker thread) ==
+PW -> FQ : drain(≤512)
+activate PW
+PW -> LOG : (1) appendBatch\nON CONFLICT(event_id) DO NOTHING
+note right of LOG #LightGreen
+  DURABLE COMMIT FIRST.
+  This row is the single source
+  both projections derive from.
+end note
+PW -> K : (2) publish TradeExecuted (sync ack)
+PW -> LOG : (3) markPublished(event_ids)
+PW -> K : (4) publish OrderMatched (async)
+deactivate PW
+
+== DB + mirror projection ==
+K -> FC : onTradeBatch(List)
+activate FC
+FC -> MIRROR : applyAuthoritative(cashΔ, pnl, lotEvents)
+FC -> DB : batched: deltas + lot opens/closes\n(dedup by tradeId:side)
+deactivate FC
+
+== Warm restart recovery ==
+note over PW, FC #LightCyan
+  On restart (fxoee.recovery.replay-on-startup=true):
+   * engine rebuilt by replaying trade_events oldest-first
+     (MatchingService.replayFill, via AccountBootstrapper)
+   * relay re-publishes rows where published=FALSE
+     → FillConsumer dedup (event_id) absorbs replay
+  Crash BEFORE step 1  → order never committed; engine + DB agree it never happened.
+  Crash AFTER  step 1  → relay re-publishes; DB catches up. NO DRIFT either way.
+end note
+@enduml
