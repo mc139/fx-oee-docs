@@ -103,5 +103,5 @@ Check the VM's current memory with `podman machine inspect | grep Memory`. This 
   kubectl exec -it kafka-0 -n fx-oee -- kafka-topics \
     --bootstrap-server localhost:9092 \
     --describe \
-    --topic orders.placed
+    --topic trades.executed
   ```
