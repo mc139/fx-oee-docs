@@ -35,9 +35,10 @@ Durability and the read-model are decoupled and derived:
   `reconcileReserved`).
 
 Locking is **fine-grained**: one `ReentrantLock` per pair (book) and one per account (positions),
-with reconcile run outside book locks to avoid an ABBA deadlock. (See
-[ADR 0004](0004-async-fill-queue-over-disruptor.md) for why this is not a single-threaded Disruptor
-design, and [doc 01](../01-architecture.md) for the locking model.)
+with reconcile run outside book locks to avoid an ABBA deadlock (see [doc 01](../01-architecture.md)
+for the locking model). The planned LMAX Disruptor ([ADR 0004](0004-async-fill-queue-over-disruptor.md))
+targets the post-match fill hand-off, not the matching loop itself, so it is orthogonal to this lock
+design.
 
 ## Consequences
 
