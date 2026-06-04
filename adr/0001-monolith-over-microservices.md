@@ -1,5 +1,7 @@
 # ADR 0001 — Monolith over microservices
 
+_Last updated: 2026-06-04 21:57 BST._
+
 **Status:** Accepted
 
 ## Context

@@ -1,5 +1,7 @@
 # 08 — Testing
 
+_Last updated: 2026-06-04 21:57 BST._
+
 The engine is tested as a **pure unit** — `EngineTestSupport.newService(mode)` wires a fully in-memory
 `MatchingService` (all 7 pairs, no Spring/Kafka/DB) so tests run in milliseconds. Maven is the build
 tool (`mvn test`).

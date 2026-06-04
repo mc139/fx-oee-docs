@@ -1,5 +1,7 @@
 # ADR 0003 — jOOQ over JPA/Hibernate
 
+_Last updated: 2026-06-04 21:57 BST._
+
 **Status:** Accepted
 
 ## Context

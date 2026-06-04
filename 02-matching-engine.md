@@ -1,5 +1,7 @@
 # 02 — Matching engine
 
+_Last updated: 2026-06-04 21:57 BST._
+
 The matching engine is two classes per currency pair:
 [OrderBook.java](../src/main/java/com/fxoee/matching/OrderBook.java) (state) and
 [MatchingEngine.java](../src/main/java/com/fxoee/matching/MatchingEngine.java) (algorithm). They are

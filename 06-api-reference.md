@@ -1,5 +1,7 @@
 # 06 — API reference
 
+_Last updated: 2026-06-04 21:57 BST._
+
 The API layer ([com.fxoee.api](../src/main/java/com/fxoee/api)) is a thin adapter: it parses requests,
 calls `MatchingService` (or reads a projection), and serializes the result. There are two order-entry
 surfaces — a generic `/api` one and the engine-native `/api/engine` one — plus account, debug,

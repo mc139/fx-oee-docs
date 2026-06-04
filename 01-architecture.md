@@ -1,5 +1,7 @@
 # 01 — Architecture
 
+_Last updated: 2026-06-04 21:57 BST._
+
 ## Process layout
 
 `fx-oee` is a **single Spring Boot process** ([FxOeeApplication.java](../src/main/java/com/fxoee/FxOeeApplication.java))

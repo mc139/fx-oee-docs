@@ -1,5 +1,7 @@
 # 07 — Data model
 
+_Last updated: 2026-06-04 21:57 BST._
+
 Two data models coexist: the **in-memory domain** the engine operates on, and the **PostgreSQL
 schema** the projection writes. They are deliberately separate — the DB is a read-model, not the
 source of truth.

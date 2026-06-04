@@ -1,5 +1,7 @@
 # ADR 0002 — In-memory matching engine as the source of truth
 
+_Last updated: 2026-06-04 21:57 BST._
+
 **Status:** Accepted
 
 ## Context

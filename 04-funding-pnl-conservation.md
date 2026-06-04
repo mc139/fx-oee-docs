@@ -1,5 +1,7 @@
 # 04 — Funding, P&L & conservation
 
+_Last updated: 2026-06-04 21:57 BST._
+
 All monetary values in the engine are **USD**. This doc covers how dollars are computed: the margin
 requirement, the two funding modes, P&L conversion (which differs for USD-base pairs), the taker fee,
 and the conservation invariant that ties it all together.

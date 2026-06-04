@@ -1,5 +1,7 @@
 # 09 — Deployment & operations
 
+_Last updated: 2026-06-04 21:57 BST._
+
 The reference deployment target is **Minikube** (single-node Kubernetes). A `docker-compose` stack is
 provided as a lighter local alternative. In both, the **frontend is compiled into the backend image**
 (multi-stage [Dockerfile.backend](../Dockerfile.backend): Node build → Maven build → JRE), so there is

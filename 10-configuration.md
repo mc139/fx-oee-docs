@@ -1,5 +1,7 @@
 # 10 — Configuration reference
 
+_Last updated: 2026-06-04 21:57 BST._
+
 Every runtime knob is an environment variable resolved by [application.yml](../src/main/resources/application.yml).
 In Minikube they're set by [k8s/backend/configmap.yaml](../k8s/backend/configmap.yaml) +
 [secret.yaml](../k8s/backend/secret.yaml); in compose by the `environment:` blocks.

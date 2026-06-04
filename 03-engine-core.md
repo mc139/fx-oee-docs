@@ -1,5 +1,7 @@
 # 03 — Engine core
 
+_Last updated: 2026-06-04 21:57 BST._
+
 This is the spine of the system. [MatchingService](../src/main/java/com/fxoee/engine/MatchingService.java)
 is the **source of truth**; everything else projects from it. It coordinates five collaborators, all
 pure (no Spring/Kafka/DB):

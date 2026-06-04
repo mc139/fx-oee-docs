@@ -1,5 +1,7 @@
 # 05 — Event sourcing & persistence
 
+_Last updated: 2026-06-04 21:57 BST._
+
 The engine is authoritative and in-memory. Durability and the read-model come from an **append-only
 event log** plus Kafka projections. This doc traces a fill from the matching thread to PostgreSQL and
 back through a warm restart.

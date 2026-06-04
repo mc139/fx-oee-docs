@@ -1,5 +1,7 @@
 # fx-oee — Documentation
 
+_Last updated: 2026-06-04 21:57 BST._
+
 `fx-oee` is an **FX order-execution engine**: a Spring Boot monolith that runs a price-time-priority
 matching engine entirely in the JVM, tracks margin and positions in memory, and projects every fill
 to PostgreSQL through a durable, replayable event log over Kafka.

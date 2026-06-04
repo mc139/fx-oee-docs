@@ -1,5 +1,7 @@
 # ADR 0004 — Async fill hand-off: interim `ConcurrentLinkedQueue`, LMAX Disruptor planned
 
+_Last updated: 2026-06-04 21:57 BST._
+
 **Status:** Accepted (interim implementation) · **LMAX Disruptor migration planned**
 
 > **State of the codebase:** the async hand-off currently runs on a `ConcurrentLinkedQueue`
