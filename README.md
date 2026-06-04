@@ -75,6 +75,8 @@ from the engine. See [Event sourcing & persistence](05-event-sourcing-persistenc
 | [06 — API reference](06-api-reference.md) | REST endpoints, WebSocket protocol, auth, debug/simulation endpoints |
 | [07 — Data model](07-data-model.md) | Domain records, enums, database schema (Flyway migrations) |
 | [08 — Testing](08-testing.md) | Test-suite map, invariants under test, performance floors, how to run |
+| [09 — Deployment & operations](09-deployment.md) | Minikube (reference target), docker-compose, scripts, observability, data lifecycle |
+| [10 — Configuration reference](10-configuration.md) | Every env var / property, default, and whether it's wired |
 | [ADRs](adr/README.md) | Architecture Decision Records — monolith, in-memory engine, jOOQ, async fill queue |
 
 ## The seven currency pairs
