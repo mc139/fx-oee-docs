@@ -107,3 +107,11 @@ Domain rejections ([RejectReason](../src/main/java/com/fxoee/engine/validate/Rej
 `INVALID_QUANTITY`, `UNSUPPORTED_PAIR`, `INSUFFICIENT_FUNDS`, plus `OVERLOADED` for load shedding) are
 returned in the `ExecutionReport`. Transport-level mapping to HTTP statuses is handled by
 [GlobalExceptionHandler](../src/main/java/com/fxoee/api/controller/rest/GlobalExceptionHandler.java).
+
+| HTTP | `code` | Trigger |
+|------|--------|---------|
+| 401  | `UNAUTHORIZED` | `UnauthorizedException` or missing `Authorization` header (`MissingRequestHeaderException`) |
+| 400  | `BAD_REQUEST` | `IllegalArgumentException` |
+| 409  | `CONFLICT` | `IllegalStateException` |
+| 422  | `INSUFFICIENT_FUNDS` | `InsufficientFundsException` |
+| 500  | `INTERNAL_ERROR` | Any unhandled `Exception` |
