@@ -1,6 +1,6 @@
 # 09 — Deployment & operations
 
-_Last updated: 2026-06-04 21:57 BST._
+_Last updated: 2026-06-06 BST._
 
 The reference deployment target is **Minikube** (single-node Kubernetes). A `docker-compose` stack is
 provided as a lighter local alternative. In both, the **frontend is compiled into the backend image**
@@ -99,9 +99,30 @@ The backend deployment ([deployment.yaml](../k8s/backend/deployment.yaml)) reque
 
 ### Observability
 
-Prometheus auto-discovers the backend pod via `prometheus.io/scrape` annotations and scrapes
-`/actuator/prometheus` (Micrometer). `deploy-all.sh` provisions Grafana dashboard **9628**
-("PostgreSQL Database") fed by `postgres-exporter` (`:9187`). Kafka UI is deployed for topic
+Prometheus scrapes `/actuator/prometheus` (Micrometer) every 15 s. Two Grafana dashboards are
+provisioned automatically on every `deploy-all.sh` run — no manual import needed:
+
+| Dashboard | Source | Grafana folder |
+|-----------|--------|---------------|
+| **FX-OEE Trading Engine** (home page) | `docker/grafana/dashboards/fxoee.json` (in repo) | General |
+| **PostgreSQL Database** (ID 9628) | fetched from grafana.com at deploy time | PostgreSQL |
+
+The FX-OEE dashboard covers four custom Micrometer metrics:
+
+| Metric | Type | Tags |
+|--------|------|------|
+| `orders.placed.total` | Counter | `pair`, `side` |
+| `matching.latency` | Timer + histogram buckets | `pair` |
+| `orderbook.depth` | Gauge | `pair` |
+| `trades.volume.total` | Counter | `pair` |
+
+`matching.latency` publishes Prometheus histogram buckets (`publishPercentileHistogram = true`),
+enabling server-side `histogram_quantile` for p50/p99/p999 in Grafana.
+
+Dashboard JSONs live in `docker/grafana/dashboards/` and are shared between the docker-compose
+stack (mounted directly) and Minikube (loaded into a ConfigMap by `deploy-all.sh`).
+
+`postgres-exporter` (`:9187`) feeds the PostgreSQL dashboard. Kafka UI is deployed for topic
 inspection.
 
 ## docker-compose (local alternative)
@@ -119,7 +140,7 @@ postgres-exporter, prometheus, and grafana with health-gated startup ordering.
 | postgres | 5432 |
 | kafka | 9092 |
 | prometheus | 9090 |
-| grafana | 3000 |
+| grafana | 3000 — FX-OEE dashboard auto-loaded (admin/admin) |
 | postgres-exporter | 9187 |
 
 ## Configuration
