@@ -58,24 +58,32 @@ consumer beans are absent and all publish calls are no-ops. The engine itself is
 > 🔐 The default `jwt.secret` is a known dev string in `application.yml`. It **must** be supplied via
 > the `backend-secret` Secret (k8s) or env (compose) in any non-local environment.
 
-## Defined but NOT enforced (scaffolding)
+## Pre-trade risk & circuit breaker (enforced)
 
-These keys exist in `application.yml` — and `RISK_*` / `CIRCUIT_BREAKER_*` are even set in the k8s
-ConfigMap — but **no code reads them** (verified: no `fx.risk`, `fx.circuit`, or `fx.orderbook`
-references in `src/main/java`). They are placeholders for unimplemented features. Documented here so
-nobody assumes a guarantee that isn't there.
+The `fx.risk.*` and `fx.circuit-breaker.*` keys **are** read and enforced — this was scaffolding in
+earlier revisions but is now live. See [11 — Pre-trade risk controls](11-risk-controls.md) for the
+full gate; the circuit breaker is in [circuit-breaker.md](circuit-breaker.md).
 
 | Key | Env var | Default | Status |
 |-----|---------|---------|--------|
-| `fx.risk.max-position` | `RISK_MAX_POSITION` | `10000000` | ⚠️ not enforced — no position-limit check exists |
-| `fx.risk.max-order-notional` | `RISK_MAX_ORDER_NOTIONAL` | `5000000` | ⚠️ not enforced — no per-order notional cap exists |
-| `fx.circuit-breaker.price-deviation-threshold` | `CIRCUIT_BREAKER_PRICE_DEVIATION_THRESHOLD` | `0.005` | ⚠️ not enforced — no circuit breaker exists |
+| `fx.risk.killswitch` | `RISK_KILLSWITCH` | `false` | ✅ enforced — when true, no new orders are admitted |
+| `fx.risk.max-position` | `RISK_MAX_POSITION` | `10000000` | ✅ enforced — per-account \|net qty\| per pair (0 disables) |
+| `fx.risk.max-order-notional` | `RISK_MAX_ORDER_NOTIONAL` | `5000000` | ✅ enforced — per-order USD notional cap (0 disables) |
+| `fx.risk.max-gross-exposure` | `RISK_MAX_GROSS_EXPOSURE` | `0` | ✅ enforced — per-account gross margin USD (0 = disabled) |
+| `fx.circuit-breaker.price-deviation-threshold` | `CIRCUIT_BREAKER_PRICE_DEVIATION_THRESHOLD` | `0.005` | ✅ enforced — halts a pair on a price jump beyond this; the risk gate then refuses orders on HALTED pairs |
+
+All `fx.risk.*` values are **runtime-mutable** via `PUT /api/risk/limits` / the DEBUG panel RISK tab —
+the `application.yml` values are only the startup seed.
+
+### Still scaffolding
+
+| Key | Env var | Default | Status |
+|-----|---------|---------|--------|
 | `fx.orderbook.snapshot-depth` | — | `10` | ⚠️ not read — snapshot depth is passed explicitly by callers |
 
-The only funds/structural gate that actually runs is the `PreTradeValidator` + margin reservation in
-the [submit pipeline](03-engine-core.md#the-submit-pipeline) — quantity/lot/tick checks and the
-whole-order funds check. Pre-trade **risk limits** (max position, max notional) and a **price circuit
-breaker** are future work, not current behaviour.
+The funds/structural gate is `PreTradeValidator` + margin reservation in the
+[submit pipeline](03-engine-core.md#the-submit-pipeline) — quantity/lot/tick checks and the
+whole-order funds check; the risk gate (above) runs just before it, pre-lock.
 
 ## Planned / aspirational (see ADRs)
 

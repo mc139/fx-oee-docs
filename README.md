@@ -79,6 +79,7 @@ from the engine. See [Event sourcing & persistence](05-event-sourcing-persistenc
 | [08 — Testing](08-testing.md) | Test-suite map, invariants under test, performance floors, how to run |
 | [09 — Deployment & operations](09-deployment.md) | Minikube (reference target), docker-compose, scripts, observability, data lifecycle |
 | [10 — Configuration reference](10-configuration.md) | Every env var / property, default, and whether it's wired |
+| [11 — Pre-trade risk controls](11-risk-controls.md) | `com.fxoee.risk` gate — kill-switch, notional/position/exposure limits, HALTED enforcement, runtime tuning, metrics |
 | [ADRs](adr/README.md) | Architecture Decision Records — monolith, in-memory engine, jOOQ, async fill queue |
 
 ## The seven currency pairs
