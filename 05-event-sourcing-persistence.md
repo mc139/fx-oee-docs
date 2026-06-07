@@ -1,6 +1,6 @@
 # 05 — Event sourcing & persistence
 
-_Last updated: 2026-06-04 21:57 BST._
+_Last updated: 2026-06-07 BST._
 
 The engine is authoritative and in-memory. Durability and the read-model come from an **append-only
 event log** plus Kafka projections. This doc traces a fill from the matching thread to PostgreSQL and
@@ -114,27 +114,99 @@ Snapshots may briefly lag fills (separate topic, no cross-topic ordering). Dedup
 
 ## Warm-restart recovery (engine replay)
 
-On restart the books are empty and in-memory state is gone. The engine is rebuilt from `trade_events`:
+On restart the books are empty and in-memory state is gone. The engine is rebuilt **1:1** from two
+durable sources — `trade_events` (positions + cash) and `resting_orders` (the live order books):
 
 ```mermaid
 sequenceDiagram
     participant R as Recovery
     participant MS as MatchingService
+    participant Books as OrderBooks
     participant Log as trade_events
+    participant Rest as resting_orders
     R->>MS: seedForReplay(acct, cash)  // per account: clear positions, seed cash
     R->>Log: read log in seq order
     loop each TradeExecuted
         R->>MS: replayFill(te)  // pure state replay: applyFill both sides, credit P&L, re-apply taker fee
     end
-    R->>MS: reconcileReserved(acct)  // per touched account: reserved = held margin (books empty → no resting)
+    R->>Rest: findAllOrderByPlacedAt() (oldest-first)
+    loop each resting order
+        R->>Books: addOrder(rebuilt)  // builder + Order.fill(filled) → exact remaining + priority
+    end
+    R->>MS: reconcileReserved(acct)  // per touched account: reserved = positions + resting (reads books)
 ```
 
 `replayFill` does **no** validate/reserve/match — the trade already happened and is durably logged. It
 applies each non-null side's fill to the `PositionBook`, credits realized P&L, and re-applies the
-taker fee to taker/house. Because resting orders don't survive a restart, `reconcileReserved` over the
-empty books yields `reserved == held position margin`. This round-trip is tested end-to-end in
-`MatchingServiceCornerCasesTest.replayRoundTrip`.
+taker fee to taker/house. The resting orders are then rebuilt onto the books, so `reconcileReserved`
+(which reads resting margin **from the books**) re-locks `reserved == Σ position margin + Σ resting
+margin`. This round-trip is tested in `MatchingServiceCornerCasesTest.replayRoundTrip` (positions/cash)
+and `…warmRestartRecoversRestingOrders` (resting orders).
+
+#### Resting (open, unfilled) orders are recovered 1:1
+
+`trade_events` records **fills only**, so it cannot rebuild a resting LIMIT order that never matched.
+The dedicated **`resting_orders`** table is the authoritative mirror of the live books: a row exists
+iff the order is currently resting. It is maintained incrementally by `PersistenceWorker` — the same
+off-hot-path worker that persists fills — so it has the same durability as `trade_events` and adds **no**
+cost to the matching/HTTP threads.
+
+```mermaid
+flowchart LR
+    A["order rests<br/>(LIMIT, leftover qty)"] -->|upsert| T[("resting_orders")]
+    B["resting order partially fills"] -->|upsert (lower remaining)| T
+    C["fully fills / cancelled"] -->|delete| T
+    T -->|warm restart: findAllOrderByPlacedAt| D["rebuild Order + addOrder"]
+    D --> E["reconcile → margin re-locked"]
+```
+
+`MatchingService.submit` captures the deltas under the book lock it already holds (`findOrder` per
+touched order: present ⇒ upsert with current remaining, absent ⇒ delete), packages them into the
+`PendingFill` already handed to the `FillQueue`, and the worker applies them in the same durable step as
+the trade-events append. Cancels enqueue a delete. Net effect of a restart:
+
+| Pre-crash state | After warm restart |
+|-----------------|--------------------|
+| Filled position (`trade_events`) | restored; margin re-locked |
+| Resting LIMIT order (`resting_orders`) | **restored** — same id, price, remaining qty, time priority |
+| `reserved` | restored to `Σ position margin + Σ resting margin` (reconcile reads the rebuilt books) |
+
+Scope: **all** resting orders are restored, including house/sim (null-account) liquidity. A
+partially-filled order is reconstructed exactly via `Order.fill(originalQty − remaining)`. Covered by
+`MatchingServiceCornerCasesTest.warmRestartRecoversRestingOrders` (engine) and
+`WarmRestartIntegrationTest` (submit → persist → restart → back on the book).
 
 > The recovery **relay** (re-publishing `published = FALSE` rows after a crash) is indexed by
 > `idx_trade_events_unpublished`. A `processed_events` table exists for durable consumer dedup; the
 > consumers currently use in-memory dedup.
+
+## Enabling warm restart
+
+Warm restart is gated by a single flag, `fxoee.recovery.replay-on-startup` (env
+`FXOEE_RECOVERY_REPLAY_ON_STARTUP`), **default `false`**. When `false`, `AccountBootstrapper` performs a
+fresh start — wipe transactional state, reset every account to the 10 M seed. When `true`, it replays
+`trade_events` into the engine instead (the sequence above).
+
+| Environment | Setting | Effect |
+|-------------|---------|--------|
+| **k8s** ([configmap.yaml](../k8s/backend/configmap.yaml)) | `FXOEE_RECOVERY_REPLAY_ON_STARTUP: "true"` | every pod restart (crash, rolling update, OOM kill) preserves open positions + trade history |
+| **docker-compose** (`environment:`) | `FXOEE_RECOVERY_REPLAY_ON_STARTUP=true` | same, for a long-lived compose stack |
+| **local dev** (default) | _unset → `false`_ | fresh start on every `mvn spring-boot:run` / `deploy-all.sh` (which also wipes the Postgres PVC, so there would be nothing to replay anyway) |
+
+Why it is safe to default-on for k8s: replay is **idempotent** — the relay's re-publish is de-duplicated
+downstream by `FillConsumer` on `event_id`, and an empty log makes warm restart a graceful no-op. So a
+first-ever deploy onto an empty database behaves exactly like a fresh start.
+
+Operational verification on a live cluster (minikube / k3s): see the runbook
+[testing-event-sourcing-minikube.md](testing-event-sourcing-minikube.md).
+
+## Test coverage
+
+| Layer | Test | What it covers |
+|-------|------|----------------|
+| Engine unit | `MatchingServiceCornerCasesTest.replayRoundTrip` | seed → replay 2 fills → reconcile → assert positions / cash / margin (engine only, no DB) |
+| Engine unit | `MatchingServiceCornerCasesTest.warmRestartRecoversRestingOrders` | filled position **and** resting LIMIT order both restored 1:1; `reserved == positions + resting` margin |
+| Bootstrap unit | `AccountBootstrapperTest` (7, Mockito) | fresh vs warm boot branch, resting-order rebuild + reconcile, the Kafka relay of `published=false` rows, bad-JSON tolerance, fallback to fresh start when no `TradeEventRepository` bean |
+| Bootstrap IT | `WarmRestartIntegrationTest` (5, Testcontainers + EmbeddedKafka) | DB→engine glue: `trade_events` → `recoverFromLog` → `MatchingService.snapshot`; relay re-publish; **resting-order recovery** (incl. a partially-filled row); `RestingOrderRepository` upsert/update/delete; end-to-end submit → `PersistenceWorker` persist → restart → back on the book |
+
+See [doc 08 — Testing](08-testing.md#bootstrap--recovery--warm-restart-three-layers) for the suite map.

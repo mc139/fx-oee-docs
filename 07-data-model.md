@@ -1,6 +1,6 @@
 # 07 — Data model
 
-_Last updated: 2026-06-04 21:57 BST._
+_Last updated: 2026-06-07 BST._
 
 Two data models coexist: the **in-memory domain** the engine operates on, and the **PostgreSQL
 schema** the projection writes. They are deliberately separate — the DB is a read-model, not the
@@ -98,7 +98,9 @@ carried on `TradeExecuted` and applied verbatim by `FillConsumer`:
 | V6 | seed sim accounts |
 | V7 | seed trader accounts |
 | V8 | seed house account (`HOUSE_UUID`) |
-| V9 | `trade_events` (durable log) |
+| V9 | `trade_events` (durable fill log) |
+| V10 | `orders` (async audit trail; written by `OrderAuditConsumer`) |
+| V11 | `resting_orders` (authoritative live-book mirror for warm restart) |
 
 ```mermaid
 erDiagram
@@ -142,7 +144,29 @@ erDiagram
         VARCHAR consumer
         TIMESTAMPTZ processed_at
     }
+    resting_orders {
+        VARCHAR id PK
+        UUID account_id "null = house/sim"
+        VARCHAR pair
+        VARCHAR side
+        VARCHAR type
+        NUMERIC price
+        NUMERIC quantity
+        NUMERIC remaining_quantity
+        VARCHAR client_order_id
+        TIMESTAMPTZ placed_at
+    }
 ```
+
+Notes on `resting_orders`:
+
+- Authoritative mirror of the live order books — a row exists **iff** the order is currently resting.
+  Maintained incrementally by `PersistenceWorker` (upsert on rest / partial fill, delete on full fill /
+  cancel), in the same durable step as `trade_events`. On warm restart the books are rebuilt 1:1 from it
+  (oldest-first by `placed_at` to preserve price-time priority). See
+  [doc 05](05-event-sourcing-persistence.md#resting-open-unfilled-orders-are-recovered-11).
+- Distinct from `orders` (V10), which is an **async audit trail** written off Kafka and only updated on
+  terminal status — not a reliable recovery source.
 
 Notes on `position_lot`:
 
@@ -153,7 +177,8 @@ Notes on `position_lot`:
 
 Access is via **jOOQ** repositories ([com.fxoee.persistence](../src/main/java/com/fxoee/persistence))
 — `CustomerAccountRepository`, `PositionLotRepository`, `FillBatchRepository` (batched fill writes),
-`TradeEventRepository` (append-only log).
+`TradeEventRepository` (append-only log), `RestingOrderRepository` (live-book mirror), and
+`OrderRepository` (audit trail).
 
 ## Mapping: engine ↔ DB
 

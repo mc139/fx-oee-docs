@@ -1,6 +1,6 @@
 # 10 — Configuration reference
 
-_Last updated: 2026-06-04 21:57 BST._
+_Last updated: 2026-06-07 BST._
 
 Every runtime knob is an environment variable resolved by [application.yml](../src/main/resources/application.yml).
 In Minikube they're set by [k8s/backend/configmap.yaml](../k8s/backend/configmap.yaml) +
@@ -44,6 +44,7 @@ consumer beans are absent and all publish calls are no-ops. The engine itself is
 |-----|---------|---------|--------|
 | `fxoee.funding.mode` | — | `FULL_NOTIONAL` | ✅ — `MARGIN` (leveraged) vs `FULL_NOTIONAL` ([doc 04](04-funding-pnl-conservation.md)) |
 | `fxoee.engine.authoritative` | — | `true` | ✅ — WebSocket + debug APIs read in-JVM `MatchingService` state |
+| `fxoee.recovery.replay-on-startup` | `FXOEE_RECOVERY_REPLAY_ON_STARTUP` | `false` | ✅ — when true, `AccountBootstrapper` rebuilds the engine from `trade_events` (warm restart) instead of wiping to a fresh 10M balance. Always `true` in k8s ([configmap](../k8s/backend/configmap.yaml)); `false` in local dev — `deploy-all.sh` wipes the Postgres PVC each run, so an empty log makes warm restart a no-op anyway. See [doc 05](05-event-sourcing-persistence.md#warm-restart-recovery-engine-replay). |
 | `fxoee.mock-market.enabled` | `MOCK_MARKET_ENABLED` | `false` | ✅ — `MockMarketMaker` injects house bid/ask depth every 500 ms using an OU+GARCH price model |
 | `fxoee.mock-market.interval-ms` | — | `500` | ✅ — tick interval for mock quotes |
 | `fxoee.mock-market.quantity` | — | `1000000` | ✅ — house order size per quote |

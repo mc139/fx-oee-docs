@@ -1,6 +1,6 @@
 # 08 — Testing
 
-_Last updated: 2026-06-04 21:57 BST._
+_Last updated: 2026-06-07 BST._
 
 The engine is tested as a **pure unit** — `EngineTestSupport.newService(mode)` wires a fully in-memory
 `MatchingService` (all 7 pairs, no Spring/Kafka/DB) so tests run in milliseconds. Maven is the build
@@ -36,6 +36,10 @@ flowchart TB
         p1["MatchingEngineBenchmark (JMH)"]
         p2["MatchingEnginePerfTest"]
     end
+    subgraph boot["Bootstrap / recovery — com.fxoee.bootstrap"]
+        b1["AccountBootstrapperTest ★<br/>fresh vs warm start, resting rebuild, relay, bad JSON, missing repo (Mockito)"]
+        b2["WarmRestartIntegrationTest ★<br/>real Postgres + EmbeddedKafka: trade_events + resting_orders → recoverFromLog → engine + books"]
+    end
 ```
 
 ★ = added in the comprehensive-tests pass (34 tests). The rest predate it.
@@ -66,7 +70,32 @@ Determinism: the seed is fixed, so any failure reproduces exactly.
   `clear` isolation, and **concurrency** (parallel same-account fills serialize correctly; distinct
   accounts never interfere).
 - **MatchingService** — MARKET SELL open, USD/JPY round-trip conservation, warm-restart replay
-  round-trip, `forceFlat`, `closeLot`, USD-base taker fee, snapshot view.
+  round-trip, **warm-restart recovers resting orders 1:1** (filled position and resting LIMIT both
+  restored, full margin re-locked), `forceFlat`, `closeLot`, USD-base taker fee, snapshot view.
+
+## Bootstrap / recovery — warm restart, three layers
+
+Warm restart (rebuilding the engine from the `trade_events` log instead of wiping to a fresh balance,
+see [doc 05](05-event-sourcing-persistence.md#warm-restart-recovery-engine-replay)) is covered at three
+layers, each cheaper and more granular than the last:
+
+| Layer | Test | Infra | What it pins down |
+|-------|------|-------|-------------------|
+| Engine unit | `MatchingServiceCornerCasesTest.replayRoundTrip` + `…warmRestartRecoversRestingOrders` | none | `seedForReplay` → replay fills → `reconcileReserved` reproduces position + cash + margin; and that resting (unfilled) LIMIT orders are rebuilt 1:1 on restart with full margin re-locked (`positions + resting`) |
+| Bootstrap unit | `AccountBootstrapperTest` (7) | Mockito only | both boot paths (fresh vs warm), **resting-order rebuild + reconcile**, the Kafka relay of `published=false` rows, bad-JSON tolerance, and fallback to fresh start when no `TradeEventRepository` bean exists |
+| Bootstrap IT | `WarmRestartIntegrationTest` (5) | Testcontainers Postgres + EmbeddedKafka | the **DB→engine glue**: `trade_events` → `recoverFromLog` → `MatchingService.snapshot`; relay re-publish; **resting-order recovery** (incl. a partially-filled row); `RestingOrderRepository` upsert/update/delete; and end-to-end `submit → PersistenceWorker persist → restart → back on the book` |
+
+```mermaid
+flowchart LR
+    t["trade_events"] -->|replayFill| ms["MatchingService (engine)"]
+    r["resting_orders"] -->|addOrder| bk["OrderBooks"]
+    t & r -->|recoverFromLog| ab["AccountBootstrapper"]
+    bk -->|reconcileReserved reads books| ms
+    ms -->|snapshot + book| assert["assert cash / positions / reserved / resting orders"]
+```
+
+The unit layer runs in milliseconds with no daemon; the IT needs Docker. End-to-end on a live cluster
+is in the runbook [testing-event-sourcing-minikube.md](testing-event-sourcing-minikube.md).
 
 ## Performance floors
 
@@ -87,11 +116,18 @@ For real micro-benchmarks use the JMH harness in `com.fxoee.perf.MatchingEngineB
 mvn test                                   # full suite
 mvn -o test -Dtest='EngineConservationFuzzTest,EnginePerformanceTest'   # just these
 mvn -o test -Dtest='*CornerCasesTest'      # all corner-case suites
+
+# Warm-restart coverage:
+mvn -o test -Dtest='AccountBootstrapperTest,MatchingServiceCornerCasesTest'  # offline, ~1s
+mvn test -Dtest='WarmRestartIntegrationTest'                                 # needs Docker, ~30s
 ```
 
 ### Docker-dependent tests
 
-`CustomerAccountRepositoryTest` and `PositionLotRepositoryTest` use **Testcontainers** and require a
-running Docker daemon (they spin up a real PostgreSQL). Without Docker they error with *"Could not
-find a valid Docker environment"* — this is environmental, not a code failure. Every other test
-(including all engine, matching, and the ★ suites) runs with no external dependencies.
+`CustomerAccountRepositoryTest`, `PositionLotRepositoryTest`, the `*IntegrationTest` suites, and
+`WarmRestartIntegrationTest` use **Testcontainers** and require a running Docker daemon (they spin up a
+real PostgreSQL; `WarmRestartIntegrationTest` also starts an in-process `@EmbeddedKafka` broker — no
+container needed for that part). Without Docker they error with *"Could not find a valid Docker
+environment"* — this is environmental, not a code failure. Every other test (including all engine,
+matching, the bootstrap unit test `AccountBootstrapperTest`, and the ★ suites) runs with no external
+dependencies.
