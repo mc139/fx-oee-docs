@@ -1,71 +1,206 @@
 # Market Data Feed
 
-_Last updated: 2026-06-05 BST._
+_Last updated: 2026-06-07._
 
-A provider-agnostic market-data feed: an interface for "latest mid-price per pair", one built-in
-synthetic provider derived from the order book, and a scheduled broadcaster that pushes prices over
-WebSocket. Disabled by default.
+Two independent price-feed mechanisms run in parallel and feed the same injection point
+(`TradingWebSocketHandler.injectMockQuote`). They can be enabled together or independently.
 
-## Interface contract
+---
 
-[`MarketDataService`](../src/main/java/com/fxoee/infrastructure/marketdata/MarketDataService.java):
+## 1 · Tiingo live feed (`fxoee.tiingo.enabled=true`)
 
-```java
-Optional<BigDecimal> getMidPrice(CurrencyPair pair);   // latest mid, or empty if unavailable
-Map<CurrencyPair, BigDecimal> getAllMidPrices();        // all pairs that currently have data
+Replaces synthetic prices with real FX data from [Tiingo](https://tiingo.com) (free tier supports
+all 7 pairs).
+
+### Startup — historical OHLC (REST)
+
+On `@PostConstruct`, `TiingoMarketDataService` makes one REST call per **(pair × timeframe)**
+combination (49 calls total) to seed the chart history:
+
+```
+GET https://api.tiingo.com/tiingo/fx/prices
+    ?tickers=eurusd&startDate=2026-05-08&resampleFreq=1Min&token=KEY
 ```
 
-Implementations may be **live** (an external HTTP API) or **synthetic** (derived from local state).
-Exactly one `MarketDataService` bean is active at a time, selected by the `provider` property.
+Tiingo returns a flat array of OHLC bars; one call per pair avoids the 10 000-row response cap
+on the free tier. Each bar maps directly to the internal `Candle(t, open, high, low, close)` record
+and is written via `handler.seedCandleHistory(pair, tf, candles)`.
 
-## Built-in provider: `orderbook`
+Supported timeframes and their Tiingo `resampleFreq` equivalents:
 
-[`OrderBookMidPriceService`](../src/main/java/com/fxoee/infrastructure/marketdata/OrderBookMidPriceService.java)
-derives each pair's mid as `(bestBid + bestAsk) / 2` from the in-memory order book, or empty when
-either side is missing. It is annotated:
+| Internal TF | Tiingo `resampleFreq` |
+|---|---|
+| `1m` | `1Min` |
+| `5m` | `5Min` |
+| `15m` | `15Min` |
+| `30m` | `30Min` |
+| `1h` | `1Hour` |
+| `4h` | `4Hour` |
+| `1d` | `1Day` |
 
-```java
-@ConditionalOnProperty(name = "fxoee.market-data.provider", havingValue = "orderbook", matchIfMissing = true)
-```
+### Live feed — WebSocket
 
-so it is the default provider unless `provider` names another.
-
-## Adding a new provider
-
-1. Implement `MarketDataService` (e.g. an HTTP client for Frankfurter or Twelve Data).
-2. Annotate the bean:
-   ```java
-   @Component
-   @ConditionalOnProperty(name = "fxoee.market-data.provider", havingValue = "frankfurter")
-   public class FrankfurterMarketDataService implements MarketDataService { ... }
-   ```
-3. Select it: `fxoee.market-data.provider=frankfurter`.
-
-The `havingValue` guard ensures only the selected provider is wired, so `MarketDataBroadcaster` always
-has exactly one `MarketDataService` to inject. (The built-in `orderbook` provider uses
-`matchIfMissing = true`, so it is the fallback when `provider` is unset.)
-
-## Broadcaster
-
-[`MarketDataBroadcaster`](../src/main/java/com/fxoee/infrastructure/marketdata/MarketDataBroadcaster.java)
-is created only when `fxoee.market-data.enabled=true`. It polls `getAllMidPrices()` on a fixed delay
-(`@Scheduled(fixedDelayString = "${fxoee.market-data.polling-interval-ms:1000}")`) and broadcasts each
-pair's mid as a `MARKET_DATA` message. It runs on Spring's scheduler thread (`@EnableScheduling` is on
-the application class).
-
-## Configuration
-
-| Key | Env var | Default | Meaning |
-| --- | --- | --- | --- |
-| `fxoee.market-data.enabled` | `MARKET_DATA_ENABLED` | `false` | Start the polling broadcaster. |
-| `fxoee.market-data.polling-interval-ms` | `MARKET_DATA_POLL_MS` | `1000` | Poll / broadcast interval (ms). |
-| `fxoee.market-data.provider` | — | `orderbook` | Provider id selecting the `MarketDataService` impl. |
-
-## WebSocket message
-
-Same `type` / `payload` envelope as the other broadcasts (sent to sessions subscribed to the pair);
-`mid` is scaled to 5 decimals:
+After history loads, a persistent WebSocket connection is opened to `wss://api.tiingo.com/fx`:
 
 ```json
-{ "type": "MARKET_DATA", "payload": { "pair": "EUR_USD", "mid": "1.08520" } }
+{
+  "eventName": "subscribe",
+  "authorization": "TOKEN",
+  "eventData": {
+    "thresholdLevel": 5,
+    "tickers": ["eurusd","gbpusd","usdjpy","usdchf","audusd","usdcad","nzdusd"]
+  }
+}
 ```
+
+`thresholdLevel` is configurable — lower = more frequent ticks, higher = less noise for dev.
+
+Incoming `"type":"Q"` messages are mapped to `CurrencyPair` and injected into the engine:
+
+```
+eurusd → CurrencyPair.EUR_USD → handler.injectMockQuote(pair, bid, ask, quantity)
+```
+
+Non-`"Q"` messages (heartbeat `"H"`, subscription ack `"I"`) are ignored. On disconnect the
+service reconnects automatically after 5 seconds using a virtual thread.
+
+### Market-closed behaviour
+
+The FX market is closed Friday ~22:00 UTC → Sunday ~22:00 UTC. During this window:
+- The WebSocket stays connected but Tiingo sends only heartbeats.
+- No `injectMockQuote` calls are made → order book is static.
+- Enable `MockMarketMaker` in parallel (`MOCK_MARKET_ENABLED=true`) to keep synthetic depth
+  during the weekend.
+
+### Configuration
+
+| Key | Env var | Default | Meaning |
+|---|---|---|---|
+| `fxoee.tiingo.enabled` | `TIINGO_ENABLED` | `false` | Activate REST history + WebSocket feed. |
+| `fxoee.tiingo.api-key` | `TIINGO_API_KEY` | _(required)_ | Tiingo API token — goes in `backend-secret`. |
+| `fxoee.tiingo.history-days` | `TIINGO_HISTORY_DAYS` | `7` | Days of OHLC history loaded per timeframe on startup. |
+| `fxoee.tiingo.threshold-level` | `TIINGO_THRESHOLD_LEVEL` | `5` | WebSocket throttle (ms between price updates). |
+| `fxoee.tiingo.quantity` | `TIINGO_QUANTITY` | `1000000` | Size of each LIMIT order injected per quote. |
+
+> **Secret hygiene:** `TIINGO_API_KEY` must be placed in `k8s/backend/secret.yaml`, which is
+> listed in `.gitignore` and never committed.
+
+---
+
+## 2 · MockMarketMaker (`fxoee.mock-market.enabled=true`)
+
+Generates synthetic FX prices locally — no external dependencies. Used as:
+
+- **Primary feed** when no Tiingo key is available.
+- **Weekend fallback** alongside Tiingo when the real FX market is closed.
+
+### Price model
+
+`FxMockDataGenerator` implements an **Ornstein-Uhlenbeck** process with GARCH-lite volatility
+clustering:
+
+```
+mid[t] = mid[t-1] + θ·(μ - mid[t-1]) + σ[t]·ε        (OU mean reversion)
+σ[t]   = σ_base · volMultiplier · (1 + α·|ε[t-1]|)    (GARCH-lite clustering)
+```
+
+| Parameter | Value | Effect |
+|---|---|---|
+| θ (theta) | 0.003 | Half-life ~230 ticks (~2 min at 500 ms/tick) — slow drift back to target |
+| α (GARCH alpha) | 0.35 | Moderate volatility clustering after large moves |
+| Spike probability | 0.4% | Rare 4–8× moves simulating news events |
+| Dynamic spread | ×vol ratio | Spread widens proportionally when vol is elevated |
+
+After a price shock the **OU target (μ) is updated to the shocked level** — the process
+continues from the new price rather than snapping back to the pre-shock base.
+
+### Configuration
+
+| Key | Env var | Default | Meaning |
+|---|---|---|---|
+| `fxoee.mock-market.enabled` | `MOCK_MARKET_ENABLED` | `false` | Enable `MockMarketMaker`. |
+| `fxoee.mock-market.interval-ms` | — | `500` | Tick interval in milliseconds. |
+| `fxoee.mock-market.quantity` | — | `1000000` | Size of house bid/ask LIMIT orders. |
+
+---
+
+## 3 · Runtime controls (DEBUG panel → MOCK MARKET tab)
+
+When `MockMarketMaker` is active, its parameters can be changed live without a restart.
+
+### REST API
+
+All endpoints are unauthenticated (debug-only, same policy as `/api/debug/*`).
+
+#### `GET /api/debug/mock-market/status`
+
+Returns current state:
+
+```json
+{
+  "enabled": true,
+  "volatilityMultiplier": 1.0,
+  "currentMids": {
+    "EUR/USD": 1.08512,
+    "GBP/USD": 1.27043,
+    ...
+  }
+}
+```
+
+#### `POST /api/debug/mock-market/volatility`
+
+Set the global volatility multiplier (applied on top of the per-pair base σ):
+
+```json
+{ "multiplier": 5.0 }
+```
+
+Range: `[0.1, 50]`. `1.0` = normal market conditions; `10.0` = extreme stress.
+
+#### `POST /api/debug/mock-market/shock`
+
+Instantly shift a pair's mid price by a percentage. The OU target is updated so the
+generator continues from the new level rather than reverting immediately:
+
+```json
+{ "pair": "EUR_USD", "pct": -0.10 }
+```
+
+`pct` range: `[-0.5, 0.5]` (±50%). The engine injects the new price on the very next tick
+(within `interval-ms`).
+
+### Debug panel
+
+The **MOCK MARKET** tab in the DEBUG screen surfaces all of the above:
+
+- **Status banner** — enabled/disabled indicator, current vol multiplier, live mid prices for all 7 pairs.
+- **Volatility slider** — drag 0.1×–20×, then APPLY. RESET returns to 1×.
+- **Price shock** — pair selector, ±2/5/10% preset buttons (or custom input), ⚡ SHOCK fires the shock
+  with a confirmation prompt. Colour coding: red = downward shock, green = upward.
+
+---
+
+## 4 · Injection point
+
+Both feeds converge on the same method:
+
+```java
+TradingWebSocketHandler.injectMockQuote(CurrencyPair pair, BigDecimal bid, BigDecimal ask, BigDecimal qty)
+```
+
+This cancels the previous house LIMIT orders for the pair and places fresh BUY @ bid / SELL @ ask
+against `HouseAccount.HOUSE_UUID`, providing permanent counterparty depth. After injection,
+`broadcastSnapshot(pair)` and `broadcastAccountUpdate()` push the updated state to all connected
+WebSocket clients.
+
+---
+
+## 5 · Provider selection summary
+
+| Scenario | Config |
+|---|---|
+| Local dev, no API key | `MOCK_MARKET_ENABLED=true` |
+| Production with live feed | `TIINGO_ENABLED=true`, `TIINGO_API_KEY=<key>`, `MOCK_MARKET_ENABLED=false` |
+| Production, weekend fallback | `TIINGO_ENABLED=true`, `MOCK_MARKET_ENABLED=true` |
+| Stress-test (no real prices needed) | `MOCK_MARKET_ENABLED=true`, set vol multiplier high via DEBUG panel |

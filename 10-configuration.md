@@ -44,7 +44,24 @@ consumer beans are absent and all publish calls are no-ops. The engine itself is
 |-----|---------|---------|--------|
 | `fxoee.funding.mode` | — | `FULL_NOTIONAL` | ✅ — `MARGIN` (leveraged) vs `FULL_NOTIONAL` ([doc 04](04-funding-pnl-conservation.md)) |
 | `fxoee.engine.authoritative` | — | `true` | ✅ — WebSocket + debug APIs read in-JVM `MatchingService` state |
-| `fxoee.mock-market.enabled` | — | `false` | ✅ — `MockMarketMaker` injects house bid/ask depth every 500ms |
+| `fxoee.mock-market.enabled` | `MOCK_MARKET_ENABLED` | `false` | ✅ — `MockMarketMaker` injects house bid/ask depth every 500 ms using an OU+GARCH price model |
+| `fxoee.mock-market.interval-ms` | — | `500` | ✅ — tick interval for mock quotes |
+| `fxoee.mock-market.quantity` | — | `1000000` | ✅ — house order size per quote |
+
+## Tiingo live feed
+
+Real FX data via Tiingo REST (OHLC history) + WebSocket (live quotes). See [market-data.md](market-data.md) for full details.
+
+| Key | Env var | Default | Status |
+|-----|---------|---------|--------|
+| `fxoee.tiingo.enabled` | `TIINGO_ENABLED` | `false` | ✅ — activates `TiingoMarketDataService` |
+| `fxoee.tiingo.api-key` | `TIINGO_API_KEY` | _(required when enabled)_ | ✅ — **secret**, goes in `backend-secret`, never in configmap |
+| `fxoee.tiingo.history-days` | `TIINGO_HISTORY_DAYS` | `7` | ✅ — days of OHLC history loaded per timeframe on startup |
+| `fxoee.tiingo.threshold-level` | `TIINGO_THRESHOLD_LEVEL` | `5` | ✅ — WebSocket throttle (ms between price updates; 0 = every tick) |
+| `fxoee.tiingo.quantity` | `TIINGO_QUANTITY` | `1000000` | ✅ — house order size injected per live quote |
+
+Both `tiingo` and `mock-market` can run simultaneously. Typical production setup:
+`TIINGO_ENABLED=true` + `MOCK_MARKET_ENABLED=true` (mock provides weekend / fallback depth).
 
 ## Server, auth, metrics
 
