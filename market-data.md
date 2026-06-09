@@ -1,9 +1,12 @@
 # Market Data Feed
 
-_Last updated: 2026-06-07._
+_Last updated: 2026-06-09._
 
-Two independent price-feed mechanisms run in parallel and feed the same injection point
-(`TradingWebSocketHandler.injectMockQuote`). They can be enabled together or independently.
+Two independent price-feed mechanisms feed the same injection point
+(`TradingWebSocketHandler.injectMockQuote`). They can be enabled together or independently. When
+both are on, they coordinate automatically: the mock maker stands down while Tiingo is streaming
+real quotes and takes over again the moment the live feed goes quiet (weekends, network drops). The
+section on [market-closed behaviour](#market-closed-behaviour) explains how that hand-off works.
 
 ---
 
@@ -66,11 +69,27 @@ service reconnects automatically after 5 seconds using a virtual thread.
 
 ### Market-closed behaviour
 
-The FX market is closed Friday ~22:00 UTC → Sunday ~22:00 UTC. During this window:
-- The WebSocket stays connected but Tiingo sends only heartbeats.
-- No `injectMockQuote` calls are made → order book is static.
-- Enable `MockMarketMaker` in parallel (`MOCK_MARKET_ENABLED=true`) to keep synthetic depth
-  during the weekend.
+The FX market is closed Friday ~22:00 UTC to Sunday ~22:00 UTC. During this window the WebSocket
+stays connected but Tiingo sends only heartbeats, so no real quotes arrive.
+
+`TiingoMarketDataService.isLive()` is the signal everything keys off:
+
+```java
+private volatile long lastQuoteMs = 0;            // stamped on every "Q" message
+
+public boolean isLive() {
+    return lastQuoteMs > 0 && (System.currentTimeMillis() - lastQuoteMs) < 30_000;
+}
+```
+
+If a real quote landed in the last 30 seconds, the feed counts as live. Once the gap passes 30
+seconds (the weekend, or a dropped connection), `isLive()` flips to `false`. That is the trigger for
+the automatic fallback below: if `MockMarketMaker` is enabled it simply resumes ticking and fills
+the gap with synthetic depth. No restart, no manual switch. When Tiingo comes back, the first real
+quote sets `lastQuoteMs` again and the mock maker stands back down on its next tick.
+
+So the recommended weekend setup is to leave **both** feeds enabled and let them trade places on
+their own, rather than toggling `MOCK_MARKET_ENABLED` by hand around the weekend.
 
 ### Configuration
 
@@ -111,8 +130,43 @@ mid[t] = mid[t-1] + θ·(μ - mid[t-1]) + σ[t]·ε        (OU mean reversion)
 | Spike probability | 0.4% | Rare 4–8× moves simulating news events |
 | Dynamic spread | ×vol ratio | Spread widens proportionally when vol is elevated |
 
-After a price shock the **OU target (μ) is updated to the shocked level** — the process
+After a price shock the **OU target (μ) is updated to the shocked level**, so the process
 continues from the new price rather than snapping back to the pre-shock base.
+
+### The tick gate
+
+Every tick checks two things before it touches the book:
+
+```java
+@Scheduled(fixedRateString = "${fxoee.mock-market.interval-ms:500}")
+public void tick() {
+    if (!enabled) return;
+    if (tiingo != null && tiingo.isLive()) return;  // Tiingo streaming live quotes; stand down
+    ...
+}
+```
+
+The first guard is the on/off switch. The second is the coordination with Tiingo: while real quotes
+are flowing the mock maker does nothing, which is why you can leave both feeds enabled at once
+without them fighting over the book. The moment `isLive()` goes false (see
+[market-closed behaviour](#market-closed-behaviour)) this guard stops short-circuiting and synthetic
+ticks resume.
+
+### Restart seeding
+
+On startup `MockMarketMaker` seeds OHLC candle history for every (pair, timeframe) by replaying its
+own generator backwards from "now". The last 1-minute close of that history is captured and pushed
+into the live generator:
+
+```java
+if ("1m".equals(tf)) liveSeedMids = gen.currentMids();
+...
+liveGenerator.seedMids(liveSeedMids);   // first live tick continues from end-of-history price
+```
+
+Without this the live generator would start from its hardcoded `basePrice` and the first real tick
+would print a huge candle jumping from the seeded history to the base. Seeding the generator makes
+the chart continuous across a restart.
 
 ### Configuration
 
@@ -196,11 +250,53 @@ WebSocket clients.
 
 ---
 
-## 5 · Provider selection summary
+## 5 · Spread & stale-order metrics
+
+A separate poller, `MarketDataBroadcaster` (`fxoee.market-data.enabled=true`), watches the book and
+publishes health metrics every `polling-interval-ms` (default 1000 ms). It is independent of the two
+feeds above: it reads whatever depth is currently resting, regardless of who put it there.
+
+Per pair, on each tick it computes the spread and how far the resting best bid/ask sit from an
+external reference mid, then exposes them as Micrometer gauges:
+
+| Metric | Type | Meaning |
+|---|---|---|
+| `fxoee.market.spread.bps` | gauge | `(bestAsk − bestBid) / mid × 10 000`, in basis points |
+| `fxoee.market.bid.deviation.pips` | gauge | how far the best bid sits below the external mid, in pips |
+| `fxoee.market.ask.deviation.pips` | gauge | how far the best ask sits above the external mid, in pips |
+| `fxoee.market.stale.orders` | counter | incremented each time a level crosses the stale threshold |
+
+A pip is `0.01` for USD/JPY and `0.0001` for every other pair. When a resting level drifts further
+than `fxoee.market-data.stale-order-pip-threshold` pips (default 50) from the mid, the counter ticks
+up and a `STALE_ORDER` event is pushed to every client subscribed to that pair:
+
+```json
+{
+  "type": "STALE_ORDER",
+  "payload": {
+    "pair": "EUR_USD",
+    "side": "BID",
+    "bookPrice": "1.08200",
+    "marketMid": "1.08720",
+    "deviationPips": 52
+  }
+}
+```
+
+This is what flags house depth that the price feed has left behind, for example a mock level that
+did not get refreshed, or a Tiingo gap that froze the book.
+
+---
+
+## 6 · Provider selection summary
+
+The mock maker auto-suppresses while Tiingo is live (see [the tick gate](#the-tick-gate)), so leaving
+both on is safe in every row below.
 
 | Scenario | Config |
 |---|---|
 | Local dev, no API key | `MOCK_MARKET_ENABLED=true` |
 | Production with live feed | `TIINGO_ENABLED=true`, `TIINGO_API_KEY=<key>`, `MOCK_MARKET_ENABLED=false` |
-| Production, weekend fallback | `TIINGO_ENABLED=true`, `MOCK_MARKET_ENABLED=true` |
+| Production, weekend fallback | `TIINGO_ENABLED=true`, `MOCK_MARKET_ENABLED=true` (mock fills in automatically when the feed goes quiet) |
 | Stress-test (no real prices needed) | `MOCK_MARKET_ENABLED=true`, set vol multiplier high via DEBUG panel |
+| Book-health monitoring | add `MARKET_DATA_ENABLED=true` for spread / stale-order metrics |

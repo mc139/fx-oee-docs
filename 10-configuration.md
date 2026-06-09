@@ -1,6 +1,6 @@
 # 10 — Configuration reference
 
-_Last updated: 2026-06-07 BST._
+_Last updated: 2026-06-09 BST._
 
 Every runtime knob is an environment variable resolved by [application.yml](../src/main/resources/application.yml).
 In Minikube they're set by [k8s/backend/configmap.yaml](../k8s/backend/configmap.yaml) +
@@ -61,8 +61,23 @@ Real FX data via Tiingo REST (OHLC history) + WebSocket (live quotes). See [mark
 | `fxoee.tiingo.threshold-level` | `TIINGO_THRESHOLD_LEVEL` | `5` | ✅ — WebSocket throttle (ms between price updates; 0 = every tick) |
 | `fxoee.tiingo.quantity` | `TIINGO_QUANTITY` | `1000000` | ✅ — house order size injected per live quote |
 
-Both `tiingo` and `mock-market` can run simultaneously. Typical production setup:
-`TIINGO_ENABLED=true` + `MOCK_MARKET_ENABLED=true` (mock provides weekend / fallback depth).
+Both `tiingo` and `mock-market` can run simultaneously, and they coordinate on their own: the mock
+maker stands down while Tiingo is streaming and resumes within 30 seconds of the live feed going
+quiet. Typical production setup is `TIINGO_ENABLED=true` + `MOCK_MARKET_ENABLED=true`, which gives
+real prices in the week and synthetic depth over the weekend with no manual switch. See
+[market-data.md](market-data.md#market-closed-behaviour).
+
+## Market-data broadcaster (spread & stale metrics)
+
+A separate poller from the two feeds above. It reads whatever depth is resting and publishes
+book-health metrics; it does not generate prices. See [market-data.md](market-data.md#5--spread--stale-order-metrics).
+
+| Key | Env var | Default | Status |
+|-----|---------|---------|--------|
+| `fxoee.market-data.enabled` | `MARKET_DATA_ENABLED` | `false` | ✅ — runs `MarketDataBroadcaster`; emits `fxoee.market.spread.bps`, `*.bid/ask.deviation.pips`, `fxoee.market.stale.orders` |
+| `fxoee.market-data.polling-interval-ms` | — | `1000` | ✅ — how often the book is sampled and metrics refreshed |
+| `fxoee.market-data.provider` | — | `orderbook` | ✅ — `MarketDataService` impl; only `orderbook` is built in |
+| `fxoee.market-data.stale-order-pip-threshold` | — | `50` | ✅ — a resting level this many pips off the external mid trips the stale counter and a `STALE_ORDER` WebSocket event (1 pip = 0.01 for USD/JPY, 0.0001 otherwise) |
 
 ## Server, auth, metrics
 

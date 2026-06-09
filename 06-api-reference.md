@@ -1,6 +1,6 @@
 # 06 — API reference
 
-_Last updated: 2026-06-04 21:57 BST._
+_Last updated: 2026-06-09 BST._
 
 The API layer ([com.fxoee.api](../src/main/java/com/fxoee/api)) is a thin adapter: it parses requests,
 calls `MatchingService` (or reads a projection), and serializes the result. There are two order-entry
@@ -97,9 +97,29 @@ WebSocket handshakes are authenticated by `JwtHandshakeInterceptor`.
 
 A thin handler that parses client messages, dispatches order actions to `MatchingService`, and streams
 market data + account snapshots back. Supported chart timeframes: `1m, 5m, 15m, 30m, 1h, 4h, 1d`.
-Live ticks come from the [MockMarketMaker](../src/main/java/com/fxoee/infrastructure/marketdata/MockMarketMaker.java)
+Live ticks come from either the live [Tiingo feed](market-data.md) or the
+[MockMarketMaker](../src/main/java/com/fxoee/infrastructure/marketdata/MockMarketMaker.java)
 when `fxoee.mock-market.enabled=true` (it injects matched LIMIT BUY/SELL depth for the house account
 every 500ms and seeds OHLC candle history at startup).
+
+### Client → server messages
+
+| `type` | Fields | Action |
+|--------|--------|--------|
+| `SUBSCRIBE` / `UNSUBSCRIBE` | `pair` | start / stop receiving snapshots for a pair |
+| `NEW_ORDER` | `pair`, `side`, `orderType`, `price?`, `quantity`, `clientOrderId?` | submit an order |
+| `CANCEL_ORDER` | `orderId` | cancel a resting order |
+| `CLOSE_POSITION` | `pair`, `lotId?` | close one lot, or the whole pair if `lotId` is omitted |
+
+### Server → client envelopes
+
+Every broadcast is `{ "type": ..., "payload": ... }`. The notable ones:
+
+| `type` | Payload | Sent when |
+|--------|---------|-----------|
+| `MARKET_DATA` | `{ pair, mid }` | each price tick |
+| `STATUS_UPDATE` | `{ pair, status }` | a pair is HALTED / resumed by the circuit breaker |
+| `STALE_ORDER` | `{ pair, side, bookPrice, marketMid, deviationPips }` | a resting level drifts past the stale-order pip threshold (needs `fxoee.market-data.enabled=true`; see [market-data.md](market-data.md#5--spread--stale-order-metrics)) |
 
 ## Errors
 

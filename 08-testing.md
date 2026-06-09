@@ -1,6 +1,6 @@
 # 08 — Testing
 
-_Last updated: 2026-06-07 BST._
+_Last updated: 2026-06-09 BST._
 
 The engine is tested as a **pure unit** — `EngineTestSupport.newService(mode)` wires a fully in-memory
 `MatchingService` (all 7 pairs, no Spring/Kafka/DB) so tests run in milliseconds. Maven is the build
@@ -40,9 +40,18 @@ flowchart TB
         b1["AccountBootstrapperTest ★<br/>fresh vs warm start, resting rebuild, relay, bad JSON, missing repo (Mockito)"]
         b2["WarmRestartIntegrationTest ★<br/>real Postgres + EmbeddedKafka: trade_events + resting_orders → recoverFromLog → engine + books"]
     end
+    subgraph e2e["End-to-end pipeline — com.fxoee.it ◆"]
+        e0["AbstractKafkaE2ETest<br/>shared base: singleton Postgres + EmbeddedKafka, full Spring context"]
+        e1["BalanceDbE2ETest (9)<br/>cash + reserved land in DB"]
+        e2["OrderAuditDbE2ETest (10)<br/>order_audit rows + status transitions"]
+        e3["PositionLotDbE2ETest (7)<br/>position_lot open/close projections"]
+        e4["RestingOrderDbE2ETest (8)<br/>resting_orders upsert/delete"]
+        e5["OrderTradeWebSocketIntegrationTest (1)<br/>REST → engine → Kafka → WS push"]
+    end
 ```
 
 ★ = added in the comprehensive-tests pass (34 tests). The rest predate it.
+◆ = the `com.fxoee.it` end-to-end suite (see [End-to-end pipeline tests](#end-to-end-pipeline-tests)).
 
 ## What the invariant/fuzz tests assert
 
@@ -97,6 +106,45 @@ flowchart LR
 The unit layer runs in milliseconds with no daemon; the IT needs Docker. End-to-end on a live cluster
 is in the runbook [testing-event-sourcing-minikube.md](testing-event-sourcing-minikube.md).
 
+## End-to-end pipeline tests
+
+The `com.fxoee.it` suite proves the whole write path actually reaches Postgres, not just that the
+engine computed the right numbers. A request goes in over REST and the test waits for the row to show
+up in the database, exercising every hop in between:
+
+```
+REST → MatchingService (engine) → FillQueue → PersistenceWorker → Kafka → FillConsumer → Postgres
+                                                                  └→ OrderAuditConsumer → order_audit
+```
+
+Everything hangs off one base class, `AbstractKafkaE2ETest`:
+
+- **Real infrastructure, started once.** A singleton Testcontainers Postgres (`postgres:16-alpine`)
+  boots once per JVM and is shared across every subclass, and an in-process `@EmbeddedKafka` broker
+  stands in for real Kafka. Because `@DynamicPropertySource` hands every subclass the same datasource
+  URL, they share one Spring context, so the heavy boot cost is paid a single time.
+- **Full async stack live.** `PersistenceWorker`, `FillConsumer`, `OrderAuditConsumer`, and
+  `RestingOrderRepository` are all wired and running, the same beans as production. The feeds and
+  warm-restart replay are switched off (`market-data`, `mock-market`, `sample-data`,
+  `recovery.replay-on-startup` all false) so each run starts from a known, quiet state.
+- **Async writes are awaited, not slept on.** Since the DB write happens on a Kafka consumer thread,
+  assertions poll through an `awaitTrue` helper rather than a fixed sleep, which keeps the tests both
+  fast and non-flaky.
+- **Clean slate per test.** `resetState()` runs before each test: it clears the order books, resets
+  in-memory positions, ledger, and account mirrors, resets DB balances, and truncates the audit
+  tables. Every test therefore starts flat, with no open positions and `INITIAL_BALANCE` cash.
+
+| Test | Tests | What it pins down |
+|------|-------|-------------------|
+| `BalanceDbE2ETest` | 9 | cash and reserved funds reach `customer_account` correctly after fills, reserves, and releases |
+| `OrderAuditDbE2ETest` | 10 | `order_audit` captures the full status trail (placed → filled / cancelled / rejected) |
+| `PositionLotDbE2ETest` | 7 | `position_lot` rows open and close in step with the engine's FIFO netting |
+| `RestingOrderDbE2ETest` | 8 | `resting_orders` is upserted on a resting LIMIT and deleted on fill or cancel |
+| `OrderTradeWebSocketIntegrationTest` | 1 | a REST order produces the matching trade and pushes it out over the `/ws` WebSocket |
+
+These need Docker for the Postgres container; the embedded Kafka runs in-process. They are the
+slowest tests in the suite, so they sit behind the same Docker gate as the integration tests below.
+
 ## Performance floors
 
 `EnginePerformanceTest` (`@Tag("perf")`) measures hot-path throughput with **generous floors** — it
@@ -120,14 +168,19 @@ mvn -o test -Dtest='*CornerCasesTest'      # all corner-case suites
 # Warm-restart coverage:
 mvn -o test -Dtest='AccountBootstrapperTest,MatchingServiceCornerCasesTest'  # offline, ~1s
 mvn test -Dtest='WarmRestartIntegrationTest'                                 # needs Docker, ~30s
+
+# End-to-end DB + WS pipeline (needs Docker):
+mvn test -Dtest='com.fxoee.it.*E2ETest'                                      # all DB E2E suites
+mvn test -Dtest='OrderTradeWebSocketIntegrationTest'                         # REST → WS round-trip
 ```
 
 ### Docker-dependent tests
 
-`CustomerAccountRepositoryTest`, `PositionLotRepositoryTest`, the `*IntegrationTest` suites, and
-`WarmRestartIntegrationTest` use **Testcontainers** and require a running Docker daemon (they spin up a
-real PostgreSQL; `WarmRestartIntegrationTest` also starts an in-process `@EmbeddedKafka` broker — no
-container needed for that part). Without Docker they error with *"Could not find a valid Docker
-environment"* — this is environmental, not a code failure. Every other test (including all engine,
+`CustomerAccountRepositoryTest`, `PositionLotRepositoryTest`, the `*IntegrationTest` suites,
+`WarmRestartIntegrationTest`, and the whole `com.fxoee.it` end-to-end suite use **Testcontainers** and
+require a running Docker daemon (they spin up a real PostgreSQL; the `*E2ETest` classes and
+`WarmRestartIntegrationTest` also start an in-process `@EmbeddedKafka` broker, so no container is
+needed for the Kafka side). Without Docker they error with *"Could not find a valid Docker
+environment"*, which is environmental, not a code failure. Every other test (including all engine,
 matching, the bootstrap unit test `AccountBootstrapperTest`, and the ★ suites) runs with no external
 dependencies.
