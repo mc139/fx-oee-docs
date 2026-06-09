@@ -33,7 +33,7 @@ Every public method takes the book's single `ReentrantLock` ([OrderBook.java:51]
 ## The matching algorithm
 
 `MatchingEngine.match(Order incoming)` acquires the book lock, sweeps the opposite side, then decides
-the order's final disposition. The four documented rules:
+the order's final disposition. The five documented rules:
 
 1. **Price priority** — better-priced resting orders match first.
 2. **Time priority** — FIFO within a price level.

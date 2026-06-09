@@ -43,7 +43,7 @@ flowchart TB
     subgraph e2e["End-to-end pipeline — com.fxoee.it ◆"]
         e0["AbstractKafkaE2ETest<br/>shared base: singleton Postgres + EmbeddedKafka, full Spring context"]
         e1["BalanceDbE2ETest (9)<br/>cash + reserved land in DB"]
-        e2["OrderAuditDbE2ETest (10)<br/>order_audit rows + status transitions"]
+        e2["OrderAuditDbE2ETest (10)<br/>orders-table rows + status transitions"]
         e3["PositionLotDbE2ETest (7)<br/>position_lot open/close projections"]
         e4["RestingOrderDbE2ETest (8)<br/>resting_orders upsert/delete"]
         e5["OrderTradeWebSocketIntegrationTest (1)<br/>REST → engine → Kafka → WS push"]
@@ -114,7 +114,7 @@ up in the database, exercising every hop in between:
 
 ```
 REST → MatchingService (engine) → FillQueue → PersistenceWorker → Kafka → FillConsumer → Postgres
-                                                                  └→ OrderAuditConsumer → order_audit
+                                                                  └→ OrderAuditConsumer → orders
 ```
 
 Everything hangs off one base class, `AbstractKafkaE2ETest`:
@@ -137,7 +137,7 @@ Everything hangs off one base class, `AbstractKafkaE2ETest`:
 | Test | Tests | What it pins down |
 |------|-------|-------------------|
 | `BalanceDbE2ETest` | 9 | cash and reserved funds reach `customer_account` correctly after fills, reserves, and releases |
-| `OrderAuditDbE2ETest` | 10 | `order_audit` captures the full status trail (placed → filled / cancelled / rejected) |
+| `OrderAuditDbE2ETest` | 10 | the `orders` table captures the full status trail (placed → filled / cancelled / rejected) |
 | `PositionLotDbE2ETest` | 7 | `position_lot` rows open and close in step with the engine's FIFO netting |
 | `RestingOrderDbE2ETest` | 8 | `resting_orders` is upserted on a resting LIMIT and deleted on fill or cancel |
 | `OrderTradeWebSocketIntegrationTest` | 1 | a REST order produces the matching trade and pushes it out over the `/ws` WebSocket |

@@ -25,7 +25,7 @@ applies the Flyway migrations, then runs `jooq-codegen` to generate typed table/
 `src/generated/jooq`. Repositories write explicit, type-safe SQL through those generated classes
 (`spring-boot-starter-jooq`).
 
-Schema is owned by **Flyway migrations** (`V1..V9`), and jOOQ generates *from the migrated schema* —
+Schema is owned by **Flyway migrations** (`V1..V11`), and jOOQ generates *from the migrated schema* —
 so the generated code and the runtime schema are the same artifact by construction.
 
 ## Consequences

@@ -4,7 +4,7 @@
 
 ## Record a replacement
 
-1. Start the stack: `docker-compose up` (or `./mvnw spring-boot:run` + `cd frontend && npm run dev`).
+1. Start the stack: `docker-compose up` (or `mvn spring-boot:run` + `cd frontend && npm run dev`).
 2. Open the trading UI at `http://localhost` (or `http://localhost:5173` in dev).
 3. Log in, select **EUR/USD**, and place a few limit orders on both sides so the book updates visibly.
 4. Use macOS **Screenshot → Record Selected Portion** (or OBS / ScreenToGif) on the order-book panel for ~5–10 s.

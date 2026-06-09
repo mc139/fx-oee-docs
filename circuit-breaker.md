@@ -56,10 +56,11 @@ Same `type` / `payload` envelope as the other broadcasts (sent to sessions subsc
 
 ## Known limitations
 
-- **`HALTED` is advisory.** It surfaces via the status API, the `STATUS_UPDATE` broadcast, and the
-  frontend badge, but the pre-trade path does **not** reject orders on a halted pair — enforcement
-  would require a status check inside `MatchingService.submit`. Today the breaker is an
-  observability / signalling mechanism, not a hard trading stop.
+- **The breaker only signals; the pre-trade risk gate enforces the halt.** The breaker itself
+  surfaces a halt via the status API, the `STATUS_UPDATE` broadcast, and the frontend badge. Hard
+  enforcement lives in the risk gate ([doc 11](11-risk-controls.md)): it reads
+  `TradingStatusService.getStatus(pair)` before the book lock and **rejects** new orders on a halted
+  pair with `MARKET_HALTED`. So the breaker sets the halt and the risk gate makes it a trading stop.
 - **In-memory, resets on restart.** `lastPrice` and pair status live only in the JVM; a restart clears
   them (every pair starts `OPEN`).
 - **No automatic cool-down.** A halted pair stays halted until `reset` is called; there is no timed

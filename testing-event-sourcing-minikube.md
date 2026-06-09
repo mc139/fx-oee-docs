@@ -115,7 +115,7 @@ log) are untouched.
 kubectl logs -n fx-oee -l app=backend | grep -iE "bootstrap|warm|replay|relayed"
 # Expected:
 #   Bootstrap: warm restart — replaying trade_events into the engine
-#   Bootstrap: warm restart complete — replayed N trades across M accounts
+#   Bootstrap: warm restart complete — replayed N trades, restored M resting orders across K accounts
 ```
 
 If you instead see `Bootstrap: Initializing accounts with 10M balance (fresh start)`, the flag from
