@@ -1,6 +1,6 @@
-# ADR 0003 — jOOQ over JPA/Hibernate
+# ADR 0003 - jOOQ over JPA/Hibernate
 
-_Last updated: 2026-06-04 21:57 BST._
+_Last updated: 2026-06-09 BST._
 
 **Status:** Accepted
 
@@ -12,9 +12,9 @@ effects: incrementing `customer_account.account_balance` by a stamped delta, ins
 `position_lot` rows, appending to `trade_events`. The shape is known, the SQL is hot, and the work is
 set-based.
 
-JPA/Hibernate optimizes for a different problem — managing an object graph with a persistence context,
+JPA/Hibernate optimizes for a different problem: managing an object graph with a persistence context,
 dirty checking, lazy loading, and cascades. Against this projection workload those features are
-liabilities: the L1 cache and dirty-checking add overhead and surprise on batched writes, generated
+liabilities. The L1 cache and dirty-checking add overhead and surprise on batched writes, generated
 SQL is hard to predict, and there is no compile-time guarantee the queries match the schema.
 
 ## Decision
@@ -25,22 +25,22 @@ applies the Flyway migrations, then runs `jooq-codegen` to generate typed table/
 `src/generated/jooq`. Repositories write explicit, type-safe SQL through those generated classes
 (`spring-boot-starter-jooq`).
 
-Schema is owned by **Flyway migrations** (`V1..V11`), and jOOQ generates *from the migrated schema* —
+Schema is owned by **Flyway migrations** (`V1..V11`), and jOOQ generates *from the migrated schema*,
 so the generated code and the runtime schema are the same artifact by construction.
 
 ## Consequences
 
 **Positive**
-- SQL is explicit and predictable — no hidden N+1s, no flush-timing surprises; what you write is what
+- SQL is explicit and predictable: no hidden N+1s, no flush-timing surprises; what you write is what
   runs. Ideal for the batched `FillBatchRepository` writes on the projection path.
 - **Compile-time safety**: a column rename in a migration breaks the build at the generated types, not
-  at runtime — caught the moment codegen reruns.
+  at runtime; it's caught the moment codegen reruns.
 - Set-based and batched operations are first-class, matching the projection workload.
 - Migrations remain the single source of schema truth; codegen derives from them.
 
 **Negative / accepted trade-offs**
 - Codegen requires Docker (a throwaway Postgres) to regenerate `src/generated/jooq` after a schema
-  change — an extra build step versus annotation-only JPA entities.
+  change: an extra build step versus annotation-only JPA entities.
 - More verbose for trivial CRUD than Spring Data repositories.
-- No portable ORM abstraction: the queries are written against PostgreSQL. Acceptable — Postgres is
-  the chosen and only target.
+- No portable ORM abstraction: the queries are written against PostgreSQL. Acceptable, since Postgres
+  is the chosen and only target.

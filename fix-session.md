@@ -10,7 +10,7 @@ FIX 4.4 support is **planned but not yet implemented**.
 
 | Component | Description |
 |-----------|-------------|
-| `FixSessionAdapter` | `Application` implementor — routes `NewOrderSingle (D)`, `OrderCancelRequest (F)` into `OrderService` |
+| `FixSessionAdapter` | `Application` implementor; routes `NewOrderSingle (D)`, `OrderCancelRequest (F)` into `OrderService` |
 | `fix.cfg` | Session config (SocketAcceptPort, SenderCompID, TargetCompID, DataDictionary) |
 | Execution Reports | `ExecutionReport (8)` sent back for fills, rejections, and cancels |
 | Market data | `MarketDataSnapshotFullRefresh (W)` / `MarketDataIncrementalRefresh (X)` from `MarketDataBroadcaster` |

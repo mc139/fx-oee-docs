@@ -1,21 +1,21 @@
-# ADR 0002 — In-memory matching engine as the source of truth
+# ADR 0002 - In-memory matching engine as the source of truth
 
-_Last updated: 2026-06-04 21:57 BST._
+_Last updated: 2026-06-09 BST._
 
 **Status:** Accepted
 
 ## Context
 
 An order book matches at the speed of memory. A naive design makes the database the source of truth
-and reads/writes rows on every order — but a SELECT-then-match-then-UPDATE round-trip per order caps
+and reads/writes rows on every order, but a SELECT-then-match-then-UPDATE round-trip per order caps
 throughput at the DB's transaction rate (thousands/sec at best) and serializes the hot path on the
 connection pool. We need order entry to match in microseconds while still surviving a restart with no
 lost or invented trades.
 
 There are two state-of-truth options:
 
-1. **DB-authoritative** — every match is a transaction; the DB is correct by construction but slow.
-2. **Memory-authoritative** — the engine holds state in RAM and matches without I/O; durability is a
+1. **DB-authoritative**: every match is a transaction; the DB is correct by construction but slow.
+2. **Memory-authoritative**: the engine holds state in RAM and matches without I/O; durability is a
    separate concern.
 
 ## Decision
@@ -31,7 +31,7 @@ Durability and the read-model are decoupled and derived:
 - `PersistenceWorker` appends it to the **append-only `trade_events` log** *before* publishing to
   Kafka, so the log is the single committed source both projections derive from.
 - The **DB projection** (`FillConsumer`) and the **in-memory mirror** (`AccountState`) apply those
-  stamped effects **verbatim** — they never re-derive open/close or cash math, so they cannot drift
+  stamped effects **verbatim**. They never re-derive open/close or cash math, so they cannot drift
   from the engine.
 - On restart the engine is **replayed** from the log (`seedForReplay` → `replayFill` →
   `reconcileReserved`).
@@ -47,7 +47,7 @@ design.
 **Positive**
 - Matching is memory-speed (measured ~218k `submit`/sec, ~4.4M `applyFill`/sec in
   `EnginePerformanceTest`), with no DB on the critical path.
-- Engine, DB, and mirror cannot diverge — all three derive from one committed log.
+- Engine, DB, and mirror cannot diverge: all three derive from one committed log.
 - Warm restart with no data loss and no invented trades (crash-before-insert = never happened;
   crash-after-insert = re-published idempotently).
 - The conservation invariant (`cash == deposit + Σ realized P&L`) holds in pure memory and is fuzz-

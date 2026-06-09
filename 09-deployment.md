@@ -1,4 +1,4 @@
-# 09 — Deployment & operations
+# 09 - Deployment & operations
 
 _Last updated: 2026-06-09._
 
@@ -51,7 +51,7 @@ kubectl apply -k k8s/overlays/prod/
 
 ```mermaid
 flowchart TB
-    subgraph mk["Minikube cluster — namespace: fx-oee"]
+    subgraph mk["Minikube cluster - namespace: fx-oee"]
         ing["ingress-nginx\nlocalhost"]
         be["Deployment: backend\nlocalhost/fx-oee-backend:dev  :8080"]
         subgraph stateful["StatefulSets"]
@@ -87,7 +87,7 @@ minikube start
 
 [bootstrap-cluster.sh](../scripts/bootstrap-cluster.sh) enables the `ingress` and `metrics-server`
 addons, then runs `kubectl apply -k k8s/overlays/local/` (retrying until the nginx admission webhook
-is serving). Idempotent — safe to re-run.
+is serving). Idempotent, so it's safe to re-run.
 
 ### Build & deploy the backend
 
@@ -108,7 +108,7 @@ then `minikube image load`). After applying the base backend manifests it patche
 to `IfNotPresent` and removes `imagePullSecrets` so no registry auth is attempted.
 
 > **Data lifecycle.** `deploy-all.sh` **deletes the Postgres PVC** on every run (fresh DB).
-> `--wipe` additionally scales Kafka/Zookeeper to zero (emptyDir destroyed — all topics lost).
+> `--wipe` additionally scales Kafka/Zookeeper to zero (emptyDir destroyed, all topics lost).
 
 ### Accessing services (port-forward)
 
@@ -135,7 +135,7 @@ echo "$(minikube ip) fx-oee.local grafana.fx-oee.local prometheus.fx-oee.local" 
 
 The remote debugger (JDWP, `suspend=n`) listens on container port **5005**.
 
-### Hybrid dev — local backend + frontend, Minikube infra
+### Hybrid dev: local backend + frontend, Minikube infra
 
 For fast iteration, keep Postgres, Kafka, Zookeeper, and observability in Minikube and run
 **Spring Boot + Vite** on the host. Frontend changes hot-reload instantly on
@@ -158,10 +158,10 @@ flowchart LR
 ```
 
 **Prerequisites:** cluster bootstrapped (`./scripts/bootstrap-cluster.sh`). Observability is
-optional — deploy once with `./scripts/deploy-all.sh` if you want Grafana/Prometheus in-cluster
+optional. Deploy once with `./scripts/deploy-all.sh` if you want Grafana/Prometheus in-cluster
 (remember `deploy-all` resets the Postgres PVC every run).
 
-**Kafka from the host** — the broker exposes a second **EXTERNAL** listener on port **9093** that
+**Kafka from the host:** the broker exposes a second **EXTERNAL** listener on port **9093** that
 advertises `localhost:9093` (see `k8s/kafka/kafka.yaml`). `dev-local-backend.sh` port-forwards
 that port and sets `KAFKA_BOOTSTRAP_SERVERS=localhost:9093`. No `/etc/hosts` entry needed. On
 first run (or after upgrading manifests) the script patches and restarts Kafka if the EXTERNAL
@@ -176,7 +176,7 @@ listener is missing.
 # Full dev stack: backend + Vite (open http://localhost:5173 for UI work)
 ./scripts/dev-local-backend.sh --run
 
-# Backend only — when attaching an IDE debugger (--be-only skips Vite)
+# Backend only, for attaching an IDE debugger (--be-only skips Vite)
 ./scripts/dev-local-backend.sh --run --be-only
 
 # Also forward grafana (3000), kafka-ui (9090), prometheus (9091)
@@ -197,12 +197,12 @@ The script writes `.env.local` (gitignored) with the same variables as the k8s C
 `--run` waits for `/actuator/health` before starting Vite so the first page load succeeds.
 `npm install` in `frontend/` runs automatically on first use if `node_modules` is missing.
 
-> **Note.** In-cluster Prometheus scrapes `backend:8080` only — metrics from a host-run backend
+> **Note.** In-cluster Prometheus scrapes `backend:8080` only. Metrics from a host-run backend
 > are not collected unless you add a scrape target manually.
 
 ---
 
-## Production — Hetzner k3s
+## Production: Hetzner k3s
 
 ```mermaid
 flowchart LR
@@ -234,8 +234,8 @@ flowchart LR
 
 Push to `master` → CI passes → `deploy-hetzner.yml` runs:
 
-1. **Build & push** — multi-stage Docker build, pushes `:latest` to ghcr.io  
-2. **SSH deploy** — connects to Hetzner, runs:
+1. **Build & push**: multi-stage Docker build, pushes `:latest` to ghcr.io
+2. **SSH deploy**: connects to Hetzner, runs:
    ```bash
    git pull --ff-only                              # sync manifests
    kubectl apply -f k8s/namespace.yaml             # ensure namespace
@@ -285,7 +285,7 @@ kubectl apply -k k8s/overlays/prod/
 
 | Probe | Config |
 |-------|--------|
-| startupProbe | `/actuator/health`, 60 × 10s (up to 10 min — cold boot is slow) |
+| startupProbe | `/actuator/health`, 60 × 10s (up to 10 min; cold boot is slow) |
 | readinessProbe | `/actuator/health`, every 10s |
 | livenessProbe | `/actuator/health`, every 15s, 4 failures → restart |
 
@@ -294,7 +294,7 @@ kubectl apply -k k8s/overlays/prod/
 ## Observability
 
 Prometheus scrapes `/actuator/prometheus` (Micrometer) every 15s. Two Grafana dashboards are
-provisioned automatically by `deploy-all.sh` — no manual import needed:
+provisioned automatically by `deploy-all.sh`, no manual import needed:
 
 | Dashboard | Source |
 |-----------|--------|
@@ -322,14 +322,17 @@ deployed for topic inspection.
 docker compose up --build
 ```
 
-[docker-compose.yml](../docker-compose.yml) starts backend, postgres, zookeeper, kafka,
-postgres-exporter, prometheus, and grafana with health-gated ordering.
+[docker-compose.yml](../docker-compose.yml) starts nginx, backend, postgres, zookeeper, kafka,
+postgres-exporter, prometheus, and grafana with health-gated ordering. nginx fronts the app on
+port 80, and the backend is also reachable directly on 8080.
 
 | Service | Host port |
 |---------|-----------|
+| nginx (app entry) | 80 |
 | backend (app) | 8080 |
 | postgres | 5432 |
 | kafka | 9092 |
+| postgres-exporter | 9187 |
 | prometheus | 9090 |
 | grafana | 3000 |
 

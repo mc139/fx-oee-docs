@@ -1,6 +1,6 @@
-# 02 — Matching engine
+# 02 - Matching engine
 
-_Last updated: 2026-06-04 21:57 BST._
+_Last updated: 2026-06-09 BST._
 
 The matching engine is two classes per currency pair:
 [OrderBook.java](../src/main/java/com/fxoee/matching/OrderBook.java) (state) and
@@ -12,8 +12,8 @@ pure and stateless beyond the book; `MatchingService` owns one pair of them per 
 ```mermaid
 flowchart LR
     subgraph book["OrderBook (one per pair)"]
-        bids["bids: TreeMap&lt;price, Queue&lt;Order&gt;&gt;<br/>DESCENDING — best bid = firstKey()"]
-        asks["asks: TreeMap&lt;price, Queue&lt;Order&gt;&gt;<br/>ASCENDING — best ask = firstKey()"]
+        bids["bids: TreeMap&lt;price, Queue&lt;Order&gt;&gt;<br/>DESCENDING, best bid = firstKey()"]
+        asks["asks: TreeMap&lt;price, Queue&lt;Order&gt;&gt;<br/>ASCENDING, best ask = firstKey()"]
         idx["orderIndex: LinkedHashMap&lt;id, Order&gt;<br/>O(1) lookup for cancel"]
         byacct["byAccount: Map&lt;UUID, LinkedHashMap&lt;id, Order&gt;&gt;<br/>O(k) getOrdersForAccount"]
     end
@@ -27,7 +27,7 @@ flowchart LR
   pairs × every touched account on every fill; a full scan of the book was the CPU bottleneck under
   simulation load. It is now O(k) where k = that account's resting orders.
 
-Every public method takes the book's single `ReentrantLock` ([OrderBook.java:51](../src/main/java/com/fxoee/matching/OrderBook.java)).
+Every public method takes the book's single `ReentrantLock` ([OrderBook.java:53](../src/main/java/com/fxoee/matching/OrderBook.java)).
 `clearAll()` wipes all four structures atomically (used by reset/bootstrap).
 
 ## The matching algorithm
@@ -35,11 +35,11 @@ Every public method takes the book's single `ReentrantLock` ([OrderBook.java:51]
 `MatchingEngine.match(Order incoming)` acquires the book lock, sweeps the opposite side, then decides
 the order's final disposition. The five documented rules:
 
-1. **Price priority** — better-priced resting orders match first.
-2. **Time priority** — FIFO within a price level.
-3. **Partial fills** — when sizes differ, the larger order rests with reduced quantity.
-4. **MARKET orders** — match best-available; the unfilled remainder is **rejected** (IOC), never rests.
-5. **Self-trade prevention (STP)** — cancel-newest.
+1. **Price priority**: better-priced resting orders match first.
+2. **Time priority**: FIFO within a price level.
+3. **Partial fills**: when sizes differ, the larger order rests with reduced quantity.
+4. **MARKET orders**: match best-available; the unfilled remainder is **rejected** (IOC), never rests.
+5. **Self-trade prevention (STP)**: cancel-newest.
 
 ```mermaid
 flowchart TD
@@ -68,7 +68,7 @@ flowchart TD
 
 ### Execution price = the maker's price
 
-`executeTrade` is always called with the **resting (passive) order's price** — never the aggressor's,
+`executeTrade` is always called with the **resting (passive) order's price**, never the aggressor's,
 never inferred from timestamps ([MatchingEngine.java](../src/main/java/com/fxoee/matching/MatchingEngine.java)).
 A buyer crossing a book of asks at 1.2705 then 1.2709 pays each maker's price in turn (price
 improvement), not their own limit. This is verified by `SpecWorkedExamplesTest.priceImprovement`.
@@ -80,13 +80,13 @@ decrements `remainingQuantity` and flips status to `FILLED` or `PARTIALLY_FILLED
 `parkOrReject`:
 
 - a still-active **LIMIT** remainder is added to the book (it rests and becomes liquidity);
-- a still-active **MARKET** remainder is **rejected** — there is no more liquidity, and MARKET orders
+- a still-active **MARKET** remainder is **rejected**: there is no more liquidity, and MARKET orders
   never rest (immediate-or-cancel).
 
 ### Self-trade prevention (cancel-newest)
 
 When the aggressor would match its own resting order (same non-null `accountId`), the engine leaves
-the resting order intact and **cancels the aggressor's remaining quantity** — the aggressor never
+the resting order intact and **cancels the aggressor's remaining quantity**. The aggressor never
 rests, and the sweep stops. STP is checked per resting order, *after* any fills against other
 accounts at better prices have already happened. Orders with a `null` accountId (mock / internal) are
 exempt and never self-trade.
@@ -97,10 +97,10 @@ sequenceDiagram
     participant Book as Ask side
     Note over Book: 200 @1.2705 (acct Y)<br/>400 @1.2706 (acct X, own)
     A->>Book: peek best ask
-    Book-->>A: 200 @1.2705 (Y) — not self
+    Book-->>A: 200 @1.2705 (Y), not self
     A->>Book: fill 200 @1.2705
     A->>Book: peek best ask
-    Book-->>A: 400 @1.2706 (X) — SELF TRADE
+    Book-->>A: 400 @1.2706 (X), SELF TRADE
     A->>A: cancel remaining, stop
     Note over Book: own 400 @1.2706 stays as best ask
 ```
@@ -111,7 +111,7 @@ Verified by `SpecWorkedExamplesTest.stpCancelNewest` and `MatchingServiceTest.st
 
 A MARKET BUY has no limit price, so its margin can't be sized before the sweep. The
 [MarketBuyEstimator](../src/main/java/com/fxoee/engine/match/MarketBuyEstimator.java) walks the ask
-depth under the same book lock to compute the exact sweep cost — see
+depth under the same book lock to compute the exact sweep cost. See
 [Engine core](03-engine-core.md#market-buy-funding).
 
 ## Where this is tested

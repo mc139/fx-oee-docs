@@ -1,6 +1,6 @@
-# ADR 0001 — Monolith over microservices
+# ADR 0001 - Monolith over microservices
 
-_Last updated: 2026-06-04 21:57 BST._
+_Last updated: 2026-06-09 BST._
 
 **Status:** Accepted
 
@@ -24,7 +24,7 @@ mock market maker. Use **internal module boundaries** (Java packages with a deli
 `com.fxoee.engine` core that touches Spring only in `EngineConfig`) instead of network boundaries.
 
 Scaling and decoupling that genuinely benefit from async are handled **inside** the monolith via
-Kafka — the engine publishes events that drive the DB projection and WebSocket fan-out — without
+Kafka: the engine publishes events that drive the DB projection and WebSocket fan-out, without
 fragmenting the transactional core.
 
 ## Consequences
@@ -32,13 +32,13 @@ fragmenting the transactional core.
 **Positive**
 - The hot path is in-process method calls under local locks: microsecond-scale, no distributed
   transactions, no partial-failure saga logic.
-- One deployable artifact, one schema, one log stream — simple to run and reason about.
+- One deployable artifact, one schema, one log stream: simple to run and reason about.
 - The pure-Java engine core stays framework-free and trivially unit-testable
   (`EngineTestSupport.newService` wires the whole engine with no Spring/Kafka/DB).
 
 **Negative / accepted trade-offs**
 - Vertical scaling only for the matching core; horizontal scale comes from partitioning by currency
   pair within the process (one `OrderBook`/`MatchingEngine` per pair), not from more service instances.
-- A deploy restarts the whole system — mitigated by warm-restart replay from the `trade_events` log
+- A deploy restarts the whole system, mitigated by warm-restart replay from the `trade_events` log
   ([doc 05](../05-event-sourcing-persistence.md)).
 - Module boundaries are enforced by convention/packages, not by the compiler or the network.

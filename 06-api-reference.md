@@ -1,11 +1,15 @@
-# 06 — API reference
+# 06 - API reference
 
 _Last updated: 2026-06-09 BST._
 
 The API layer ([com.fxoee.api](../src/main/java/com/fxoee/api)) is a thin adapter: it parses requests,
 calls `MatchingService` (or reads a projection), and serializes the result. There are two order-entry
-surfaces — a generic `/api` one and the engine-native `/api/engine` one — plus account, debug,
+surfaces (a generic `/api` one and the engine-native `/api/engine` one) plus account, debug,
 simulation, auth, and WebSocket endpoints.
+
+Endpoints that live in other docs: [risk limits](11-risk-controls.md#rest-api) (`/api/risk`),
+[trading status + circuit breaker](circuit-breaker.md#endpoints) (`/api/status`, `/api/circuit-breaker`),
+and [mock-market controls](market-data.md#rest-api) (`/api/debug/mock-market`).
 
 ```mermaid
 flowchart LR
@@ -27,27 +31,33 @@ flowchart LR
 
 ## Order entry
 
-### Engine-native — [EngineOrderController](../src/main/java/com/fxoee/api/controller/rest/EngineOrderController.java) (`/api/engine`)
+### Engine-native: [EngineOrderController](../src/main/java/com/fxoee/api/controller/rest/EngineOrderController.java) (`/api/engine`)
 
 | Method | Path | Body / params | Returns |
 |--------|------|---------------|---------|
-| POST | `/accounts/{id}/deposit` | amount | `AccountView` (cash, reserved, …) |
+| POST | `/accounts/{id}/deposit` | `amount` (request param) | `AccountView` (cash, reserved, free, positions) |
 | POST | `/orders` | `SubmitOrderRequest` | `ExecutionReport` |
-| GET | `/accounts/{id}` | — | `AccountView` |
+| GET | `/accounts/{id}` | none | `AccountView` |
 
-`SubmitOrderRequest = { accountId, pair, side, type, price, quantity, clientOrderId }`. The controller
-builds an `Order` and calls `MatchingService.submit`; the `ExecutionReport` carries status, fills,
-remaining qty, reject reason, and taker fee.
+Heads up on `/deposit`: it calls `ledger.seed(id, amount)`, which **sets** cash to that amount
+(and zeroes reserved + realized P&L). It's a seeding tool, not an additive deposit.
 
-### Generic — [OrderController](../src/main/java/com/fxoee/api/controller/rest/OrderController.java) (`/api`)
+`SubmitOrderRequest = { accountId, pair, side, type, price, quantity }`. The controller builds an
+`Order` and calls `MatchingService.submit`; the `ExecutionReport` carries status, fills, remaining
+qty, reject reason, and taker fee.
+
+### Generic: [OrderController](../src/main/java/com/fxoee/api/controller/rest/OrderController.java) (`/api`)
 
 | Method | Path | Purpose |
 |--------|------|---------|
 | POST | `/orders` | submit an order |
-| DELETE | `/orders/{id}` | cancel a resting order |
-| GET | `/orderbook/{pair}` | order-book snapshot (depth from `fx.orderbook.snapshot-depth`, default 10) |
-| GET | `/trades` | recent trades |
+| DELETE | `/orders/{id}` | cancel a resting order (needs `Authorization` header) |
+| GET | `/orderbook/{pair}` | order-book snapshot; `?depth=` request param, default 20 |
+| GET | `/trades` | recent trades; optional `?pair=`, `?page=` (0), `?size=` (50) |
 | GET | `/positions` | open positions |
+
+The `fx.orderbook.snapshot-depth` key in `application.yml` is **not** read by this endpoint (or any
+code); depth comes from the request param. See [doc 10](10-configuration.md#still-scaffolding).
 
 ## Account
 
@@ -81,11 +91,11 @@ When `fxoee.engine.authoritative=true`, account reads reflect the in-JVM `Matchi
 | POST | `/simulate/start` \| `/simulate/stop` | drive [SimulatorService](../src/main/java/com/fxoee/application/SimulatorService.java) |
 | GET | `/simulate/status` | simulation status |
 
-The simulator submits orders from many accounts across pairs on background threads — used for
+The simulator submits orders from many accounts across pairs on background threads. It's used for
 throughput testing and to populate a lively book. A "bench" mode skips per-slot book pruning so the
 engine is measured without cancel overhead.
 
-## Auth — [AuthController](../src/main/java/com/fxoee/infrastructure/auth/AuthController.java) (`/api/auth`)
+## Auth: [AuthController](../src/main/java/com/fxoee/infrastructure/auth/AuthController.java) (`/api/auth`)
 
 | Method | Path | Purpose |
 |--------|------|---------|
@@ -93,7 +103,7 @@ engine is measured without cancel overhead.
 
 WebSocket handshakes are authenticated by `JwtHandshakeInterceptor`.
 
-## WebSocket — [TradingWebSocketHandler](../src/main/java/com/fxoee/api/websocket/TradingWebSocketHandler.java) (`/ws`)
+## WebSocket: [TradingWebSocketHandler](../src/main/java/com/fxoee/api/websocket/TradingWebSocketHandler.java) (`/ws`)
 
 A thin handler that parses client messages, dispatches order actions to `MatchingService`, and streams
 market data + account snapshots back. Supported chart timeframes: `1m, 5m, 15m, 30m, 1h, 4h, 1d`.
@@ -102,7 +112,7 @@ Live ticks come from either the live [Tiingo feed](market-data.md) or the
 when `fxoee.mock-market.enabled=true` (it injects matched LIMIT BUY/SELL depth for the house account
 every 500ms and seeds OHLC candle history at startup).
 
-### Client → server messages
+### Client to server messages
 
 | `type` | Fields | Action |
 |--------|--------|--------|
@@ -111,7 +121,7 @@ every 500ms and seeds OHLC candle history at startup).
 | `CANCEL_ORDER` | `orderId` | cancel a resting order |
 | `CLOSE_POSITION` | `pair`, `lotId?` | close one lot, or the whole pair if `lotId` is omitted |
 
-### Server → client envelopes
+### Server to client envelopes
 
 Every broadcast is `{ "type": ..., "payload": ... }`. The notable ones:
 
@@ -126,13 +136,16 @@ Every broadcast is `{ "type": ..., "payload": ... }`. The notable ones:
 Domain rejections ([RejectReason](../src/main/java/com/fxoee/engine/validate/RejectReason.java):
 `INVALID_QUANTITY`, `UNSUPPORTED_PAIR`, `INSUFFICIENT_FUNDS`) are returned in the `ExecutionReport`.
 Load shedding adds a non-enum reason string `OVERLOADED` (set directly on the report when the async
-fill queue is saturated). Transport-level mapping to HTTP statuses is handled by
+fill queue is saturated). The pre-trade risk gate adds its own reasons
+([RiskRejectReason](../src/main/java/com/fxoee/risk/RiskRejectReason.java): `KILLSWITCH`,
+`MARKET_HALTED`, `ORDER_NOTIONAL_LIMIT`, `POSITION_LIMIT`, `EXPOSURE_LIMIT`; see
+[doc 11](11-risk-controls.md)). Transport-level mapping to HTTP statuses is handled by
 [GlobalExceptionHandler](../src/main/java/com/fxoee/api/controller/rest/GlobalExceptionHandler.java).
 
 | HTTP | `code` | Trigger |
 |------|--------|---------|
-| 401  | `UNAUTHORIZED` | `UnauthorizedException` or missing `Authorization` header (`MissingRequestHeaderException`) |
-| 400  | `BAD_REQUEST` | `IllegalArgumentException` |
-| 409  | `CONFLICT` | `IllegalStateException` |
-| 422  | `INSUFFICIENT_FUNDS` | `InsufficientFundsException` |
-| 500  | `INTERNAL_ERROR` | Any unhandled `Exception` |
+| 401 | `UNAUTHORIZED` | `UnauthorizedException` or missing `Authorization` header (`MissingRequestHeaderException`) |
+| 400 | `BAD_REQUEST` | `IllegalArgumentException` |
+| 409 | `CONFLICT` | `IllegalStateException` |
+| 422 | `INSUFFICIENT_FUNDS` | `InsufficientFundsException` |
+| 500 | `INTERNAL_ERROR` | Any unhandled `Exception` |

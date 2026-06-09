@@ -1,6 +1,6 @@
-# 03 — Engine core
+# 03 - Engine core
 
-_Last updated: 2026-06-04 21:57 BST._
+_Last updated: 2026-06-09 BST._
 
 This is the spine of the system. [MatchingService](../src/main/java/com/fxoee/engine/MatchingService.java)
 is the **source of truth**; everything else projects from it. It coordinates five collaborators, all
@@ -16,8 +16,8 @@ pure (no Spring/Kafka/DB):
 
 ## The submit pipeline
 
-`MatchingService.submit(Order)` runs five phases. Phases 1–4 are inside the pair's book lock; phase 5
-runs after release (see [Architecture — ABBA](01-architecture.md#the-abba-deadlock-and-how-its-avoided)).
+`MatchingService.submit(Order)` runs five phases. Phases 1-4 are inside the pair's book lock; phase 5
+runs after release (see [Architecture, ABBA section](01-architecture.md#the-abba-deadlock-and-how-its-avoided)).
 
 ```mermaid
 sequenceDiagram
@@ -38,7 +38,7 @@ sequenceDiagram
     end
     Note over MS: if FillQueue overloaded → reject OVERLOADED (load shed)
     rect rgb(235,245,255)
-    Note over MS,P: ── inside book lock ──
+    Note over MS,P: inside book lock
     MS->>MS: reserve(order)  [worst-case margin]
     alt insufficient funds
         MS->>L: (nothing locked)
@@ -53,7 +53,7 @@ sequenceDiagram
         MS->>MS: applyTakerFee (0.1% notional, trader-to-trader)
     end
     end
-    Note over MS: ── book lock released ──
+    Note over MS: book lock released
     loop each touched account
         MS->>MS: reconcileGuarded(acct) → setReserved(authoritative)
     end
@@ -61,21 +61,21 @@ sequenceDiagram
     MS-->>C: ExecutionReport
 ```
 
-### Phase 1 — structural validation
+### Phase 1: structural validation
 
 `PreTradeValidator.checkStructural` enforces (spec §10.1): pair present and supported; quantity > 0
 and a multiple of `minLotSize`; for LIMIT orders, price > 0 and a multiple of `tickSize`. Any failure
-→ `RejectReason` (`UNSUPPORTED_PAIR` / `INVALID_QUANTITY`) and an immediate rejected report.
+returns a `RejectReason` (`UNSUPPORTED_PAIR` / `INVALID_QUANTITY`) and an immediate rejected report.
 
-### Phase 2 — funds reservation (worst case)
+### Phase 2: funds reservation (worst case)
 
 `MatchingService.reserve` computes the **worst-case** margin and locks it on the ledger before
-matching. The whole-order rule applies: an order is fully funded or fully rejected — never partially.
+matching. The whole-order rule applies: an order is fully funded or fully rejected, never partially.
 
-- **LIMIT / MARKET SELL** → `PreTradeValidator.validate(order, fundsPrice)`. `fundsPrice` is the limit
+- **LIMIT / MARKET SELL**: `PreTradeValidator.validate(order, fundsPrice)`. `fundsPrice` is the limit
   price, or for a MARKET SELL the current **best bid**.
 - **Pure close** (a SELL that only reduces a long, or a BUY that only reduces a short) reserves
-  **nothing** — that margin is already held. The validator computes `openShort = qty − netLong` (or
+  **nothing**; that margin is already held. The validator computes `openShort = qty − netLong` (or
   `openLong = qty − netShort`); when ≤ 0 it returns `Accepted(0, 0)`.
 - **Flip** (close then open opposite) uses one **atomic** ledger pass: `reserveNet(release, reserve)`
   succeeds iff `free + released − reserve ≥ 0`, where `released` is the margin currently held on the
@@ -84,27 +84,27 @@ matching. The whole-order rule applies: an order is fully funded or fully reject
 #### MARKET BUY funding
 
 A MARKET BUY has no price, so [MarketBuyEstimator](../src/main/java/com/fxoee/engine/match/MarketBuyEstimator.java)
-walks the ask depth (best → worst) under the **same book lock** as the match. Because the book can't
-change between estimate and sweep, the depth-walk cost **equals** the actual sweep cost — the
+walks the ask depth (best to worst) under the **same book lock** as the match. Because the book can't
+change between estimate and sweep, the depth-walk cost **equals** the actual sweep cost: the
 reservation is exact, not over-reserved. (Best-ask alone is not worst-case; asks ascend, so deeper
 levels cost more.) Any unfilled remainder (STP or thin liquidity) is released afterward by reconcile.
 
-### Phase 3 — match
+### Phase 3: match
 
 `engine.match(order)` runs the [matching algorithm](02-matching-engine.md) and returns the trades.
 
-### Phase 4 — apply fills to positions + credit P&L
+### Phase 4: apply fills to positions + credit P&L
 
 For each trade, `applyFills` applies **both** sides to the `PositionBook` (aggressor and resting
-account) and credits each side's realized P&L to the ledger. **Cash moves only by realized P&L** —
+account) and credits each side's realized P&L to the ledger. **Cash moves only by realized P&L**;
 margin is locked, never spent. Each side's effect is captured as a `TradeExecuted` event carrying the
 exact cash delta, realized P&L, and engine-assigned lot ids, so downstream projections apply it
 verbatim. Mock/house counterparties (null account) are skipped.
 
 The **taker fee** (0.1% of notional) is charged to the aggressor only when *both* sides are real,
-non-house traders — see [doc 04](04-funding-pnl-conservation.md#taker-fee).
+non-house traders. See [doc 04](04-funding-pnl-conservation.md#taker-fee).
 
-### Phase 5 — reconcile (authoritative margin)
+### Phase 5: reconcile (authoritative margin)
 
 After the book lock is released, `reconcile(account)` sets locked margin to its **authoritative**
 value: held-position margin + the margin required by each live resting order (each netted against the
@@ -113,8 +113,8 @@ worst-case amount reserved in phase 2 and **releases any excess**.
 
 Hard invariant (§10.2): `reserved ≤ cash`. Held-position margin is fixed (positions can't be
 un-opened), so the budget for resting orders is `cash − held`. Resting orders are funded
-**oldest-first**; any that no longer fit — typically a close-order whose position another fill already
-flattened, leaving it a naked open the account can't afford — are flagged `unfunded` and **cancelled**
+**oldest-first**; any that no longer fit (typically a close-order whose position another fill already
+flattened, leaving it a naked open the account can't afford) are flagged `unfunded` and **cancelled**
 once the lock is released. This is what auto-rejects over-reserving orders.
 
 ```mermaid
@@ -126,7 +126,7 @@ flowchart TD
     fund --> set["ledger.setReserved(account, reserved)"]
 ```
 
-## PositionBook — FIFO netting
+## PositionBook: FIFO netting
 
 No-hedge, FIFO-netting position store. Lots are held per `(account, pair)` in arrival order. One
 `applyFill` turns a fill into position changes + realized P&L and returns a
@@ -151,7 +151,7 @@ removed and never reappears; `netQty == Σ signed lot qty`. Each mutation emits 
 (`Open` / `PartialClose` / `FullClose`) carrying the engine lot id, so projections key their lots
 identically.
 
-## MarginLedger — cash & locked margin
+## MarginLedger: cash & locked margin
 
 Per account: `cash`, `reserved` (locked margin), `realizedPnl`. The derived value `free = cash −
 reserved` is what new orders may draw on.
@@ -160,13 +160,13 @@ reserved` is what new orders may draw on.
 |--------|-----------|
 | `seed(id, cash)` | reset account (cash set, reserved & realizedPnl zeroed) |
 | `reserveNet(id, release, reserve)` | atomically swap; succeeds iff `cash − (reserved − release + reserve) ≥ 0` |
-| `tryReserve(id, amt)` | `reserveNet(id, 0, amt)` — whole-order reservation |
+| `tryReserve(id, amt)` | `reserveNet(id, 0, amt)`; whole-order reservation |
 | `setReserved(id, amt)` | authoritative set (floored at 0); used by reconcile |
 | `release(id, amt)` | unconditional release, floored at 0; no-op on null/≤0 |
 | `credit(id, delta)` | apply realized cash movement; also accrues `realizedPnl`; no-op on null/0 |
 
 All mutations synchronize on the per-account object. `reserveNet` is the one primitive that gates
-affordability — on failure it leaves state completely unchanged.
+affordability; on failure it leaves state completely unchanged.
 
 ## Other entry points on MatchingService
 
@@ -177,7 +177,7 @@ affordability — on failure it leaves state completely unchanged.
 | `closeLot(acct, pair, lotId)` | close one lot's quantity (FIFO, so closes oldest up to that qty) |
 | `forceFlat(acct, mids)` | credit unrealized P&L at given mids, then wipe positions + margin (used when a MARKET close finds no counterparty) |
 | `snapshot(acct, mids)` | account view: cash, notional, unrealized/realized P&L, equity, positions |
-| `seedForReplay` / `replayFill` / `reconcileReserved` | warm-restart recovery — see [doc 05](05-event-sourcing-persistence.md) |
+| `seedForReplay` / `replayFill` / `reconcileReserved` | warm-restart recovery, see [doc 05](05-event-sourcing-persistence.md) |
 | `reset(acct, cash)` | drop positions and reseed cash (debug) |
 
 Tested by `MatchingServiceTest`, `MatchingServiceCornerCasesTest`, `PositionBookTest`,

@@ -1,12 +1,12 @@
-# 04 — Funding, P&L & conservation
+# 04 - Funding, P&L & conservation
 
-_Last updated: 2026-06-04 21:57 BST._
+_Last updated: 2026-06-09 BST._
 
 All monetary values in the engine are **USD**. This doc covers how dollars are computed: the margin
 requirement, the two funding modes, P&L conversion (which differs for USD-base pairs), the taker fee,
 and the conservation invariant that ties it all together.
 
-## Margin — the single funding calculator
+## Margin: the single funding calculator
 
 Every reserve / hold / release routes through [Margin.usd(pair, qty, price)](../src/main/java/com/fxoee/engine/ledger/Margin.java),
 so the global funding mode changes the whole system in one place.
@@ -86,7 +86,7 @@ example: a 1000-unit USD/JPY fill → fee `1000 × 0.001 = 1.00 USD`
 
 The defining property of the ledger model:
 
-> **`cash == initial_deposit + Σ realized P&L`** — cash moves *only* by realized P&L credits
+> **`cash == initial_deposit + Σ realized P&L`**. Cash moves *only* by realized P&L credits
 > (including negative ones and the taker fee). Margin is locked, never spent.
 
 ```mermaid
@@ -103,12 +103,12 @@ by construction. Equity (`snapshot.equity`) is `cash + unrealized P&L`.
 
 ### How it's verified
 
-- `MatchingServiceTest.cashConservationCrossPath` — a trader↔trader open then house-close cycle is
+- `MatchingServiceTest.cashConservationCrossPath`: a trader↔trader open then house-close cycle is
   zero-sum across all accounts.
-- `MatchingServiceTest.cashConservationUsdBaseJpyDriftBounded` — on USD-base pairs a *tiny* bounded
+- `MatchingServiceTest.cashConservationUsdBaseJpyDriftBounded`: on USD-base pairs a *tiny* bounded
   drift exists; it is an FX-translation artefact of the ÷close conversion, **not** a bug.
-- `EngineConservationFuzzTest` — after **every** order in a 1500-order randomized multi-account,
-  multi-pair session, asserts: `cash == deposit + Σ realizedPnl`, `free ≥ 0`, no-hedge, `netQty == Σ
+- `EngineConservationFuzzTest`: after **every** order in a 1500-order randomized multi-account,
+  multi-pair session, asserts `cash == deposit + Σ realizedPnl`, `free ≥ 0`, no-hedge, `netQty == Σ
   lots`, and `reserved == held margin` whenever the account has no resting orders.
 
 See [Testing](08-testing.md) for the full map.

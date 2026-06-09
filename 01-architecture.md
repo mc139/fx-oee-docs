@@ -1,13 +1,13 @@
-# 01 — Architecture
+# 01 - Architecture
 
-_Last updated: 2026-06-04 21:57 BST._
+_Last updated: 2026-06-09 BST._
 
 ## Process layout
 
 `fx-oee` is a **single Spring Boot process** ([FxOeeApplication.java](../src/main/java/com/fxoee/FxOeeApplication.java))
 that embeds:
 
-- the **matching core** (`com.fxoee.engine`, `com.fxoee.matching`) — pure Java, no framework
+- the **matching core** (`com.fxoee.engine`, `com.fxoee.matching`): pure Java, no framework
   dependencies, holding all authoritative trading state in memory;
 - a **REST + WebSocket API** (`com.fxoee.api`) for order entry, account queries, market data, and debug;
 - an **async projection pipeline** (`FillQueue` → `PersistenceWorker` → Kafka → consumers) that writes
@@ -15,7 +15,7 @@ that embeds:
 - a **market simulator** and **mock market maker** for load testing and a live price feed.
 
 External infrastructure: **PostgreSQL** (projection + durable event log) and **Kafka** (event
-transport). Both are optional in dev — with `kafka.enabled=false` the engine runs standalone and all
+transport). Both are optional in dev. With `kafka.enabled=false` the engine runs standalone and all
 publish calls become no-ops (the `OrderEventProducer` / `FillQueue` beans are simply absent).
 
 ```mermaid
@@ -66,14 +66,14 @@ flowchart TB
         PL["PositionBook lock<br/>(one ReentrantLock per account)"]
         RL["reconcile lock<br/>(one ReentrantLock per account)"]
     end
-    note["RULE: reconcile runs OUTSIDE any book lock.<br/>It locks every pair's book via getOrdersForAccount,<br/>so holding one book lock while taking another<br/>would deadlock — the ABBA hazard."]
+    note["RULE: reconcile runs OUTSIDE any book lock.<br/>It locks every pair's book via getOrdersForAccount,<br/>so holding one book lock while taking another<br/>would deadlock (the ABBA hazard)."]
 ```
 
 | Lock | Scope | Held during | Source |
 |------|-------|-------------|--------|
-| Book lock | per **pair** | the whole match loop + reserve + applyFills | [OrderBook.java:51](../src/main/java/com/fxoee/matching/OrderBook.java) |
-| Position lock | per **account** | one `applyFill` / `netQty` / `lots` read | [PositionBook.java:62](../src/main/java/com/fxoee/engine/position/PositionBook.java) |
-| Reconcile lock | per **account** | one `reconcile` pass | [MatchingService.java:94](../src/main/java/com/fxoee/engine/MatchingService.java) |
+| Book lock | per **pair** | the whole match loop + reserve + applyFills | [OrderBook.java:53](../src/main/java/com/fxoee/matching/OrderBook.java) |
+| Position lock | per **account** | one `applyFill` / `netQty` / `lots` read | [PositionBook.java:45](../src/main/java/com/fxoee/engine/position/PositionBook.java) |
+| Reconcile lock | per **account** | one `reconcile` pass | [MatchingService.java:135](../src/main/java/com/fxoee/engine/MatchingService.java) |
 
 ### Why per-account position locks
 
@@ -85,10 +85,10 @@ contention: orders on different accounts never block each other.
 ### The ABBA deadlock and how it's avoided
 
 `reconcile(account)` recomputes an account's locked margin from its held positions **plus its live
-resting orders across all pairs** — so it acquires book locks for every pair. If `submit` called
+resting orders across all pairs**, so it acquires book locks for every pair. If `submit` called
 `reconcile` while still holding the aggressor pair's book lock, two concurrent submits on different
 pairs could each hold one book lock and wait for the other (ABBA). The fix
-([MatchingService.submit](../src/main/java/com/fxoee/engine/MatchingService.java:189)):
+([MatchingService.submit](../src/main/java/com/fxoee/engine/MatchingService.java:221)):
 
 1. Do validation, reserve, match, and apply-fills **inside** the book lock.
 2. **Release** the book lock.
@@ -123,7 +123,7 @@ Observability is via Spring Actuator + Micrometer Prometheus (`/actuator/prometh
 ## Failure model in one paragraph
 
 The `trade_events` table is written **before** an event is published to Kafka. A crash *before* the
-insert loses an order that was never durably committed — engine and DB agree it never happened. A
+insert loses an order that was never durably committed; engine and DB agree it never happened. A
 crash *after* the insert is recovered by re-publishing unpublished rows on restart; consumer dedup
 makes the replay idempotent. The engine itself is rebuilt from the same log. Because both projections
 derive from one committed log, they cannot diverge. Details in [doc 05](05-event-sourcing-persistence.md).

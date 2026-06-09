@@ -1,9 +1,9 @@
 # Architecture Decision Records
 
-_Last updated: 2026-06-04 21:57 BST._
+_Last updated: 2026-06-09 BST._
 
 Each ADR captures one significant decision: the context that forced it, the choice made, and the
-consequences accepted. They are immutable once accepted — a reversed decision gets a new ADR that
+consequences accepted. They are immutable once accepted; a reversed decision gets a new ADR that
 supersedes the old one rather than an edit.
 
 | ADR | Decision | Status |

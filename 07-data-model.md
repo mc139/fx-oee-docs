@@ -1,9 +1,9 @@
-# 07 — Data model
+# 07 - Data model
 
-_Last updated: 2026-06-07 BST._
+_Last updated: 2026-06-09 BST._
 
 Two data models coexist: the **in-memory domain** the engine operates on, and the **PostgreSQL
-schema** the projection writes. They are deliberately separate — the DB is a read-model, not the
+schema** the projection writes. They are deliberately separate; the DB is a read-model, not the
 source of truth.
 
 ## In-memory domain ([com.fxoee.domain](../src/main/java/com/fxoee/domain))
@@ -70,7 +70,7 @@ are exempt from funds tracking, fees, and self-trade prevention).
 
 | Enum | Values |
 |------|--------|
-| [CurrencyPair](../src/main/java/com/fxoee/domain/enums/CurrencyPair.java) | EUR_USD, GBP_USD, USD_JPY, USD_CHF, AUD_USD, USD_CAD, NZD_USD — each carries `marginRate`, `tickSize`, `minLotSize`, `isUsdBase()` |
+| [CurrencyPair](../src/main/java/com/fxoee/domain/enums/CurrencyPair.java) | EUR_USD, GBP_USD, USD_JPY, USD_CHF, AUD_USD, USD_CAD, NZD_USD; each carries `marginRate`, `tickSize`, `minLotSize`, `isUsdBase()` |
 | [OrderSide](../src/main/java/com/fxoee/domain/enums/OrderSide.java) | BUY, SELL |
 | [OrderType](../src/main/java/com/fxoee/domain/enums/OrderType.java) | LIMIT, MARKET |
 | [OrderStatus](../src/main/java/com/fxoee/domain/enums/OrderStatus.java) | NEW, PENDING, PARTIALLY_FILLED, FILLED, CANCELLED, REJECTED |
@@ -80,9 +80,9 @@ are exempt from funds tracking, fees, and self-trade prevention).
 [LotEvent](../src/main/java/com/fxoee/domain/model/LotEvent.java) is the unit of position change
 carried on `TradeExecuted` and applied verbatim by `FillConsumer`:
 
-- `Open(PositionLot lot)` — a new lot added.
-- `PartialClose(lotId, newQuantity, closePrice, realizedPnlUsd)` — lot reduced; `newQuantity` remains.
-- `FullClose(lotId, closePrice, realizedPnlUsd)` — lot removed.
+- `Open(PositionLot lot)`: a new lot added.
+- `PartialClose(lotId, newQuantity, closePrice, realizedPnlUsd)`: lot reduced; `newQuantity` remains.
+- `FullClose(lotId, closePrice, realizedPnlUsd)`: lot removed.
 
 ## Database schema (Flyway migrations)
 
@@ -160,23 +160,23 @@ erDiagram
 
 Notes on `resting_orders`:
 
-- Authoritative mirror of the live order books — a row exists **iff** the order is currently resting.
+- Authoritative mirror of the live order books: a row exists **iff** the order is currently resting.
   Maintained incrementally by `PersistenceWorker` (upsert on rest / partial fill, delete on full fill /
   cancel), in the same durable step as `trade_events`. On warm restart the books are rebuilt 1:1 from it
   (oldest-first by `placed_at` to preserve price-time priority). See
   [doc 05](05-event-sourcing-persistence.md#resting-open-unfilled-orders-are-recovered-11).
 - Distinct from `orders` (V10), which is an **async audit trail** written off Kafka and only updated on
-  terminal status — not a reliable recovery source.
+  terminal status. Not a reliable recovery source.
 
 Notes on `position_lot`:
 
 - Open lots have `closed_at IS NULL`; partial closes update `quantity` in place (entry price never
-  changes — spec §11.2). A full close stamps `closed_at`, `close_price`, `realized_pnl`.
+  changes; spec §11.2). A full close stamps `closed_at`, `close_price`, `realized_pnl`.
 - Indexed for the two hot reads: open lots per account (`WHERE closed_at IS NULL`) and lots by
   `(account_id, pair)`.
 
-Access is via **jOOQ** repositories ([com.fxoee.persistence](../src/main/java/com/fxoee/persistence))
-— `CustomerAccountRepository`, `PositionLotRepository`, `FillBatchRepository` (batched fill writes),
+Access is via **jOOQ** repositories ([com.fxoee.persistence](../src/main/java/com/fxoee/persistence)):
+`CustomerAccountRepository`, `PositionLotRepository`, `FillBatchRepository` (batched fill writes),
 `TradeEventRepository` (append-only log), `RestingOrderRepository` (live-book mirror), and
 `OrderRepository` (audit trail).
 
@@ -189,4 +189,4 @@ Access is via **jOOQ** repositories ([com.fxoee.persistence](../src/main/java/co
 | `TradeExecuted` events | `trade_events.payload` | `PersistenceWorker` (before publish) |
 
 The DB row keys (lot ids) are the **engine-assigned** ids carried on `LotEvent`, so the projection
-indexes positions identically to the engine — that's what keeps them in lockstep.
+indexes positions identically to the engine. That's what keeps them in lockstep.

@@ -15,7 +15,7 @@ section on [market-closed behaviour](#market-closed-behaviour) explains how that
 Replaces synthetic prices with real FX data from [Tiingo](https://tiingo.com) (free tier supports
 all 7 pairs).
 
-### Startup — historical OHLC (REST)
+### Startup: historical OHLC (REST)
 
 On `@PostConstruct`, `TiingoMarketDataService` makes one REST call per **(pair × timeframe)**
 combination (49 calls total) to seed the chart history:
@@ -41,7 +41,7 @@ Supported timeframes and their Tiingo `resampleFreq` equivalents:
 | `4h` | `4Hour` |
 | `1d` | `1Day` |
 
-### Live feed — WebSocket
+### Live feed: WebSocket
 
 After history loads, a persistent WebSocket connection is opened to `wss://api.tiingo.com/fx`:
 
@@ -56,7 +56,7 @@ After history loads, a persistent WebSocket connection is opened to `wss://api.t
 }
 ```
 
-`thresholdLevel` is configurable — lower = more frequent ticks, higher = less noise for dev.
+`thresholdLevel` is configurable: lower = more frequent ticks, higher = less noise for dev.
 
 Incoming `"type":"Q"` messages are mapped to `CurrencyPair` and injected into the engine:
 
@@ -96,7 +96,7 @@ their own, rather than toggling `MOCK_MARKET_ENABLED` by hand around the weekend
 | Key | Env var | Default | Meaning |
 |---|---|---|---|
 | `fxoee.tiingo.enabled` | `TIINGO_ENABLED` | `false` | Activate REST history + WebSocket feed. |
-| `fxoee.tiingo.api-key` | `TIINGO_API_KEY` | _(required)_ | Tiingo API token — goes in `backend-secret`. |
+| `fxoee.tiingo.api-key` | `TIINGO_API_KEY` | _(required)_ | Tiingo API token; goes in `backend-secret`. |
 | `fxoee.tiingo.history-days` | `TIINGO_HISTORY_DAYS` | `7` | Days of OHLC history loaded per timeframe on startup. |
 | `fxoee.tiingo.threshold-level` | `TIINGO_THRESHOLD_LEVEL` | `5` | WebSocket throttle (ms between price updates). |
 | `fxoee.tiingo.quantity` | `TIINGO_QUANTITY` | `1000000` | Size of each LIMIT order injected per quote. |
@@ -108,7 +108,7 @@ their own, rather than toggling `MOCK_MARKET_ENABLED` by hand around the weekend
 
 ## 2 · MockMarketMaker (`fxoee.mock-market.enabled=true`)
 
-Generates synthetic FX prices locally — no external dependencies. Used as:
+Generates synthetic FX prices locally, with no external dependencies. Used as:
 
 - **Primary feed** when no Tiingo key is available.
 - **Weekend fallback** alongside Tiingo when the real FX market is closed.
@@ -125,9 +125,9 @@ mid[t] = mid[t-1] + θ·(μ - mid[t-1]) + σ[t]·ε        (OU mean reversion)
 
 | Parameter | Value | Effect |
 |---|---|---|
-| θ (theta) | 0.003 | Half-life ~230 ticks (~2 min at 500 ms/tick) — slow drift back to target |
+| θ (theta) | 0.003 | Half-life ~230 ticks (~2 min at 500 ms/tick); slow drift back to target |
 | α (GARCH alpha) | 0.35 | Moderate volatility clustering after large moves |
-| Spike probability | 0.4% | Rare 4–8× moves simulating news events |
+| Spike probability | 0.4% | Rare 4-8× moves simulating news events |
 | Dynamic spread | ×vol ratio | Spread widens proportionally when vol is elevated |
 
 After a price shock the **OU target (μ) is updated to the shocked level**, so the process
@@ -173,8 +173,8 @@ the chart continuous across a restart.
 | Key | Env var | Default | Meaning |
 |---|---|---|---|
 | `fxoee.mock-market.enabled` | `MOCK_MARKET_ENABLED` | `false` | Enable `MockMarketMaker`. |
-| `fxoee.mock-market.interval-ms` | — | `500` | Tick interval in milliseconds. |
-| `fxoee.mock-market.quantity` | — | `1000000` | Size of house bid/ask LIMIT orders. |
+| `fxoee.mock-market.interval-ms` | none | `500` | Tick interval in milliseconds. |
+| `fxoee.mock-market.quantity` | none | `1000000` | Size of house bid/ask LIMIT orders. |
 
 ---
 
@@ -228,9 +228,9 @@ generator continues from the new level rather than reverting immediately:
 
 The **MOCK MARKET** tab in the DEBUG screen surfaces all of the above:
 
-- **Status banner** — enabled/disabled indicator, current vol multiplier, live mid prices for all 7 pairs.
-- **Volatility slider** — drag 0.1×–20×, then APPLY. RESET returns to 1×.
-- **Price shock** — pair selector, ±2/5/10% preset buttons (or custom input), ⚡ SHOCK fires the shock
+- **Status banner**: enabled/disabled indicator, current vol multiplier, live mid prices for all 7 pairs.
+- **Volatility slider**: drag 0.1×-20×, then APPLY. RESET returns to 1×.
+- **Price shock**: pair selector, ±2/5/10% preset buttons (or custom input), ⚡ SHOCK fires the shock
   with a confirmation prompt. Colour coding: red = downward shock, green = upward.
 
 ---
