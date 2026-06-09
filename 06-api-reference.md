@@ -124,8 +124,9 @@ Every broadcast is `{ "type": ..., "payload": ... }`. The notable ones:
 ## Errors
 
 Domain rejections ([RejectReason](../src/main/java/com/fxoee/engine/validate/RejectReason.java):
-`INVALID_QUANTITY`, `UNSUPPORTED_PAIR`, `INSUFFICIENT_FUNDS`, plus `OVERLOADED` for load shedding) are
-returned in the `ExecutionReport`. Transport-level mapping to HTTP statuses is handled by
+`INVALID_QUANTITY`, `UNSUPPORTED_PAIR`, `INSUFFICIENT_FUNDS`) are returned in the `ExecutionReport`.
+Load shedding adds a non-enum reason string `OVERLOADED` (set directly on the report when the async
+fill queue is saturated). Transport-level mapping to HTTP statuses is handled by
 [GlobalExceptionHandler](../src/main/java/com/fxoee/api/controller/rest/GlobalExceptionHandler.java).
 
 | HTTP | `code` | Trigger |

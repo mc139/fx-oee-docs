@@ -1,6 +1,6 @@
 # 09 — Deployment & operations
 
-_Last updated: 2026-06-07._
+_Last updated: 2026-06-09._
 
 The app ships as a single Docker image (`Dockerfile.backend`): Node build → Maven build → JRE. The
 **frontend is compiled into the backend JAR** (Spring Boot static resources), so there is no separate
@@ -134,6 +134,71 @@ echo "$(minikube ip) fx-oee.local grafana.fx-oee.local prometheus.fx-oee.local" 
 | `http://prometheus.fx-oee.local` | Prometheus |
 
 The remote debugger (JDWP, `suspend=n`) listens on container port **5005**.
+
+### Hybrid dev — local backend + frontend, Minikube infra
+
+For fast iteration, keep Postgres, Kafka, Zookeeper, and observability in Minikube and run
+**Spring Boot + Vite** on the host. Frontend changes hot-reload instantly on
+`http://localhost:5173`; Vite proxies `/api` and `/ws` to the local backend on `:8080`.
+
+```mermaid
+flowchart LR
+    subgraph host["Host"]
+        FE["Vite :5173\nHMR"]
+        BE["Spring Boot\n:8080"]
+        PF["kubectl port-forward"]
+    end
+    subgraph mk["Minikube fx-oee"]
+        PG[("postgres-0")]
+        KF["kafka-0"]
+        OBS["grafana / prometheus / kafka-ui"]
+    end
+    FE -->|/api /ws| BE
+    BE --> PF --> PG & KF
+```
+
+**Prerequisites:** cluster bootstrapped (`./scripts/bootstrap-cluster.sh`). Observability is
+optional — deploy once with `./scripts/deploy-all.sh` if you want Grafana/Prometheus in-cluster
+(remember `deploy-all` resets the Postgres PVC every run).
+
+**Kafka from the host** — the broker exposes a second **EXTERNAL** listener on port **9093** that
+advertises `localhost:9093` (see `k8s/kafka/kafka.yaml`). `dev-local-backend.sh` port-forwards
+that port and sets `KAFKA_BOOTSTRAP_SERVERS=localhost:9093`. No `/etc/hosts` entry needed. On
+first run (or after upgrading manifests) the script patches and restarts Kafka if the EXTERNAL
+listener is missing.
+
+**Daily workflow:**
+
+```bash
+# Port-forward postgres + kafka, scale k8s backend to 0, write .env.local
+./scripts/dev-local-backend.sh
+
+# Full dev stack: backend + Vite (open http://localhost:5173 for UI work)
+./scripts/dev-local-backend.sh --run
+
+# Backend only — when attaching an IDE debugger (--be-only skips Vite)
+./scripts/dev-local-backend.sh --run --be-only
+
+# Also forward grafana (3000), kafka-ui (9090), prometheus (9091)
+./scripts/dev-local-backend.sh --obs --run
+
+# Restore cluster backend and kill port-forwards
+./scripts/dev-local-backend.sh --stop
+```
+
+| Mode | UI | Backend | Postgres / Kafka |
+|------|-----|---------|------------------|
+| Full Minikube (`deploy-minikube.sh`) | Embedded in JAR | Pod | In-cluster |
+| Hybrid `--run` | Vite `:5173` HMR | Host `mvn` | Port-forward |
+| Hybrid `--run --be-only` | Embedded `:8080` (stale) | Host `mvn` + IDE debugger | Port-forward |
+| docker-compose | Embedded or separate Vite | Container | Compose network |
+
+The script writes `.env.local` (gitignored) with the same variables as the k8s ConfigMap/Secret.
+`--run` waits for `/actuator/health` before starting Vite so the first page load succeeds.
+`npm install` in `frontend/` runs automatically on first use if `node_modules` is missing.
+
+> **Note.** In-cluster Prometheus scrapes `backend:8080` only — metrics from a host-run backend
+> are not collected unless you add a scrape target manually.
 
 ---
 
