@@ -80,6 +80,7 @@ from the engine. See [Event sourcing & persistence](05-event-sourcing-persistenc
 | [09 - Deployment & operations](09-deployment.md) | Minikube (reference target), docker-compose, scripts, observability, data lifecycle |
 | [10 - Configuration reference](10-configuration.md) | Every env var / property, default, and whether it's wired |
 | [11 - Pre-trade risk controls](11-risk-controls.md) | `com.fxoee.risk` gate: kill-switch, notional/position/exposure limits, HALTED enforcement, runtime tuning, metrics |
+| [Speed engine](speed-engine.md) | `fxoee.engine.mode=speed`: single-writer Disruptor engine, fixed-point longs (JPY price scale 3), zero-allocation hot path, OrderBook views |
 | [Circuit breaker](circuit-breaker.md) | Price-deviation halts, status/reset endpoints, enforcement via the risk gate |
 | [Market data feed](market-data.md) | Tiingo live feed, MockMarketMaker (OU+GARCH), automatic weekend fallback, spread / stale-order metrics, DEBUG controls |
 | [FIX session](fix-session.md) | Planned FIX 4.4 gateway; dependency on classpath, no implementation yet |

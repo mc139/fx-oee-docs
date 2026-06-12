@@ -21,15 +21,17 @@ Environment-specific settings live in `k8s/overlays/`:
 
 ```
 k8s/
-├── kustomization.yaml          ← base (prod values; do not apply directly)
-├── ingress.yaml                ← Traefik, host: fxoee.mcieslik.me
-├── backend/deployment.yaml     ← ghcr.io image, Always pull, imagePullSecrets
-├── …
+├── base/                       ← prod values; do not apply directly
+│   ├── kustomization.yaml
+│   ├── ingress.yaml            ← Traefik, host: fxoee.mcieslik.me
+│   ├── backend/deployment.yaml ← ghcr.io image, Always pull, imagePullSecrets
+│   └── …
 └── overlays/
     ├── local/                  ← Minikube patches
     │   ├── kustomization.yaml
     │   └── patches/
     │       ├── ingress.yaml    ← ingressClassName: nginx
+    │       └── ingress-host.json ← host: fx-oee.local (app)
     │       └── deployment.json ← localhost image, IfNotPresent, no imagePullSecrets
     └── prod/                   ← Hetzner k3s (references base; no patches)
         └── kustomization.yaml
@@ -162,7 +164,7 @@ optional. Deploy once with `./scripts/deploy-all.sh` if you want Grafana/Prometh
 (remember `deploy-all` resets the Postgres PVC every run).
 
 **Kafka from the host:** the broker exposes a second **EXTERNAL** listener on port **9093** that
-advertises `localhost:9093` (see `k8s/kafka/kafka.yaml`). `dev-local-backend.sh` port-forwards
+advertises `localhost:9093` (see `k8s/base/kafka/kafka.yaml`). `dev-local-backend.sh` port-forwards
 that port and sets `KAFKA_BOOTSTRAP_SERVERS=localhost:9093`. No `/etc/hosts` entry needed. On
 first run (or after upgrading manifests) the script patches and restarts Kafka if the EXTERNAL
 listener is missing.
@@ -238,7 +240,7 @@ Push to `master` → CI passes → `deploy-hetzner.yml` runs:
 2. **SSH deploy**: connects to Hetzner, runs:
    ```bash
    git pull --ff-only                              # sync manifests
-   kubectl apply -f k8s/namespace.yaml             # ensure namespace
+   kubectl apply -f k8s/base/namespace.yaml        # ensure namespace
    kubectl create secret docker-registry ghcr-secret ...   # registry auth
    kubectl apply -k k8s/overlays/prod/             # all resources (Kustomize)
    kubectl rollout restart deployment/backend      # force new image
@@ -272,7 +274,7 @@ Bootstrap the cluster manually once (CI handles all subsequent deploys):
 
 ```bash
 cd /opt/fx-oee
-kubectl apply -f k8s/namespace.yaml
+kubectl apply -f k8s/base/namespace.yaml
 kubectl apply -k k8s/overlays/prod/
 ```
 
@@ -280,7 +282,7 @@ kubectl apply -k k8s/overlays/prod/
 
 ## Pod resources & probes
 
-[deployment.yaml](../k8s/backend/deployment.yaml) requests `500m` CPU / `1Gi`, limits `2` CPU /
+[deployment.yaml](../k8s/base/backend/deployment.yaml) requests `500m` CPU / `1Gi`, limits `2` CPU /
 `1.5Gi`. JVM flags: `-Xms512m -Xmx1200m -XX:+UseG1GC -XX:MaxGCPauseMillis=100`.
 
 | Probe | Config |
