@@ -1,6 +1,8 @@
 # Speed engine (fxoee.engine.mode=speed)
 
-_Last updated: 2026-06-11 BST._
+_Last updated: 2026-06-13._
+
+> **Thread & architecture diagrams:** see [speed-engine-architecture.md](speed-engine-architecture.md) for a visual map of threads, the Disruptor ring, and command flow.
 
 The system ships **two interchangeable matching engines** behind one interface,
 [TradingEngine.java](../src/main/java/com/fxoee/engine/TradingEngine.java). Which one runs is a

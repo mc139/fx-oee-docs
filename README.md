@@ -1,6 +1,6 @@
 # fx-oee Documentation
 
-_Last updated: 2026-06-09 BST._
+_Last updated: 2026-06-13._
 
 `fx-oee` is an **FX order-execution engine**: a Spring Boot monolith that runs a price-time-priority
 matching engine entirely in the JVM, tracks margin and positions in memory, and projects every fill
@@ -81,6 +81,7 @@ from the engine. See [Event sourcing & persistence](05-event-sourcing-persistenc
 | [10 - Configuration reference](10-configuration.md) | Every env var / property, default, and whether it's wired |
 | [11 - Pre-trade risk controls](11-risk-controls.md) | `com.fxoee.risk` gate: kill-switch, notional/position/exposure limits, HALTED enforcement, runtime tuning, metrics |
 | [Speed engine](speed-engine.md) | `fxoee.engine.mode=speed`: single-writer Disruptor engine, fixed-point longs (JPY price scale 3), zero-allocation hot path, OrderBook views |
+| [Speed engine — threads & architecture](speed-engine-architecture.md) | Visual thread map, Disruptor flow, command types, state ownership, sequence diagrams |
 | [Circuit breaker](circuit-breaker.md) | Price-deviation halts, status/reset endpoints, enforcement via the risk gate |
 | [Market data feed](market-data.md) | Tiingo live feed, MockMarketMaker (OU+GARCH), automatic weekend fallback, spread / stale-order metrics, DEBUG controls |
 | [FIX session](fix-session.md) | Planned FIX 4.4 gateway; dependency on classpath, no implementation yet |
