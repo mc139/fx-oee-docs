@@ -48,7 +48,22 @@
     making `balance_after` a pure in-memory running sum — which is exactly where the rebalance re-seed
     becomes load-bearing, so the two land together there.
 
-**Next step = Phase 3.**
+- **Phase 3 — DONE**: append-only cash projection. `FillBatchRepository.flushLegs` no longer UPDATEs
+  `customer_account.account_balance`; it derives the running balance from the account's latest
+  `account_transaction.balance_after` (O(1) indexed read) and appends the next row. New `seq BIGSERIAL`
+  on `account_transaction` (migration `V13`, + index `(account_id, seq DESC)`) makes "latest"
+  unambiguous (same-ms `created_at` ties under batched INSERT). `account_balance` is now frozen at the
+  initial deposit (the seed for an account with no fills). All readers migrated: `AccountService.load`
+  (mirror seed), `CustomerAccountService.getAccountBalance` (balance endpoint), `OrderBookDebugController`
+  (`dbBalance` + `totalDbCash`), and the `BalanceDbE2ETest` helper — each now reads latest
+  `balance_after` (or `initial + Σ amounts`). **910 tests green.**
+  - **Scope choices, by design:** chose the *latest-`balance_after`* source over an in-memory running
+    balance — O(1) and crash-/restart-safe with NO new drift surface, so the `ConsumerRebalanceListener`
+    re-seed is unnecessary (nothing in-memory to re-seed). Kept the `position_lot` UPDATE on close
+    (the plan's allowed option — uncontended now that each account is single-writer) and deferred the
+    COPY/multi-row bulk-load (a throughput nicety, not a hotspot).
+
+**Next step = Phase 4.**
 
 ### Diagnosis that motivated this (live metrics, real running instance)
 382s run, minikube + `kubectl port-forward`: **28.55M orders submitted, 28.45M rejected `OVERLOADED`
