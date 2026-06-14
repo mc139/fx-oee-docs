@@ -63,7 +63,31 @@
     (the plan's allowed option — uncontended now that each account is single-writer) and deferred the
     COPY/multi-row bulk-load (a throughput nicety, not a hotspot).
 
-**Next step = Phase 4.**
+- **Phase 4 — ASSESSED, NOT YET IMPLEMENTED (needs a dedicated session).** Phases 0–3 are committed and
+  the full suite (910) is green; Phase 4 was scoped but deliberately not crammed in, because a *correct*
+  implementation requires invasive, separately-validated changes:
+  1. **Engine position-restore API (both engines).** `TradingEngine` exposes read-side state (`cash`,
+     `lots`) to *build* a snapshot, but the only way it *rebuilds positions* today is `replayFill`
+     (replaying whole trades). Snapshot-based **bounded restart** therefore needs a new
+     `restore(account, cash, lots, reserved)` entry point in BOTH `MatchingService` and the fixed-point,
+     zero-alloc, single-writer `SpeedMatchingService` — the latter is delicate and must keep its
+     allocation/latency profile. Cash-only seeding (`seedForReplay`) is insufficient: without restoring
+     positions you must still replay the whole log, so the restart is not bounded.
+  2. **Replay source = a WHOLE-event WAL.** Replay reconstructs trades, but the Phase-2 `trades.byaccount`
+     topic carries per-account *legs* across 32 partitions — reassembling them into ordered trades for
+     replay is a cross-partition join. Kafka-as-WAL needs a whole-`TradeExecuted` WAL topic (or keep
+     `trade_events` as the durable log and only move snapshotting + tail-replay). Removing the synchronous
+     `trade_events` append (the headline hot-path win) is the genuinely risky part and must not regress
+     the currently-correct warm restart (`WarmRestartIntegrationTest`).
+  3. **Consistent snapshot cut** of the live single-writer engine tagged with the exact WAL offset, plus
+     **real-Kafka load validation** (EmbeddedKafka can't exercise replication/retention/offset semantics).
+
+  Recommended execution order for the next session: (a) add + unit-test the engine `restore(...)` API in
+  both engines; (b) `EngineSnapshotter` → log-compacted `engine.snapshots` topic (balances + lots +
+  resting + covered WAL offset) using the read-side accessors; (c) rewrite `recoverFromLog` to load the
+  latest snapshot then replay only the tail (KEEP `trade_events` as the WAL first — bounded restart with
+  durability unchanged); (d) only then move durability to a whole-event Kafka WAL and drop the synchronous
+  `trade_events` append, validated under real-Kafka load. Each step independently shippable + testable.
 
 ### Diagnosis that motivated this (live metrics, real running instance)
 382s run, minikube + `kubectl port-forward`: **28.55M orders submitted, 28.45M rejected `OVERLOADED`
