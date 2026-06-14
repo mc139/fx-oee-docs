@@ -69,7 +69,8 @@
   (a) `TradingEngine.restore(account, cash, realizedPnl, lots)` in BOTH engines — the speed engine
   re-opens lots at their original `seq` (`SpeedPositions.restoreLot`) so lot ids round-trip; unit-tested
   both engines. (b) `EngineSnapshot` + `EngineSnapshotter` → log-compacted `engine.snapshots` +
-  `TradeEventRepository.maxSeq`/`findPayloadsAfterSeq`. (c) `SnapshotStore` + bounded `recoverFromLog`
+  `TradeEventRepository.maxSeq`/`findPayloadBatchAfterSeq` (paged keyset replay — never loads the whole
+  log into memory). (c) `SnapshotStore` + bounded `recoverFromLog`
   (uniform snapshot cut → `restore` + replay only `seq > coveredSeq`; else full replay). `trade_events`
   stays the durable WAL. **Adversarial review (4 lenses) confirmed one HIGH:** the snapshot CUT guard is
   not airtight (an enqueue-lag window can publish a `coveredSeq` excluding an already-applied fill →
@@ -244,7 +245,7 @@ DB append is NOT the bottleneck, the broker join is) and only **pipeline the Kaf
   log-compacted `engine.snapshots` topic, tagged with the WAL offset it covers. WAL retention ≥ snapshot
   interval + margin.
 - Rewrite `AccountBootstrapper.recoverFromLog`: load latest snapshot → consume WAL from that offset →
-  bounded restart time (replaces `findAllPayloadsOrderBySeq`).
+  bounded restart time (replaces the full-log load; replay is paged via `findPayloadBatchAfterSeq`).
 - Files: `PersistenceWorker.java` (publish-only), `AccountBootstrapper.java`, new `EngineSnapshotter` +
   snapshot consumer (a `SnapshotConsumer` already exists), `KafkaTopicConfig.java` (compacted topic + retention).
 
