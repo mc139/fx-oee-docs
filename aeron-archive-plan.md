@@ -139,7 +139,8 @@ Each phase independently shippable + testable; parity-gated against the **legacy
 ### Phase B — Clean engine rewrite (no Aeron yet)
 - Split `SpeedMatchingService` monolith into the table above; behaviour identical to legacy.
 - New engine behind a flag (e.g. `fxoee.engine.mode=speed2` during the parity window) so legacy
-  still runs as the oracle.
+  still runs as the oracle. _(Done: parity held; in Phase F the legacy `com.fxoee.engine.speed`
+  package was deleted and the new engine took over the `speed` package and `fxoee.engine.mode=speed`.)_
 - **Parity harness:** drive identical order streams through legacy + new, assert identical fills,
   cash, PnL, lots, conservation. This is the correctness gate for the whole effort.
 - Run `SpeedMatchingBenchmark` against the new engine — confirm no matching-throughput regression

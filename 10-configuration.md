@@ -74,6 +74,27 @@ Active only when `fxoee.engine.mode=speed` (the branch + k8s default). These key
 The command ring size is a code constant (`1 << 16` = 65536 slots in `SpeedEngineConfig`), not a
 configurable key. The house account is pre-seeded with 10M on wiring, mirroring `default` mode.
 
+## Aeron Archive WAL (ADR 0007)
+
+The speed engine's durable trade-history path (see [speed-engine.md](speed-engine.md)). When
+`fxoee.wal.aeron.enabled=true` the engine records every fill to an embedded Aeron Archive and the
+Kafka / `FillQueue` projection is bypassed (the engine is balance-authoritative, the WAL is
+trade-history only). All keys bind in
+[SpeedEngineConfig](../src/main/java/com/fxoee/engine/speed/SpeedEngineConfig.java) and are no-ops in
+`default` mode. Off by default; the `--wal` / `--questdb` dev-script flags flip them on.
+
+| Key | Env var | Default | Status |
+|-----|---------|---------|--------|
+| `fxoee.wal.aeron.enabled` | `FXOEE_WAL_AERON_ENABLED` | `false` | ✅ record fills to the embedded Aeron Archive; nulls out the Kafka producer + `FillQueue` for speed mode |
+| `fxoee.wal.aeron.aeron-dir` | `FXOEE_WAL_AERON_DIR` | `${java.io.tmpdir}/fxoee-aeron` | ✅ embedded media-driver dir |
+| `fxoee.wal.aeron.archive-dir` | `FXOEE_WAL_ARCHIVE_DIR` | `${java.io.tmpdir}/fxoee-archive` | ✅ Archive recording dir (fresh each boot; `deleteOnStart`) |
+| `fxoee.wal.aeron.control-port` | `FXOEE_WAL_CONTROL_PORT` | `8010` | ✅ Archive control plane (loopback UDP); must be a concrete port, `0` is illegal |
+| `fxoee.wal.questdb.enabled` | `FXOEE_WAL_QUESTDB_ENABLED` | `false` | ✅ also write each trade to QuestDB over ILP for SQL history (needs a running QuestDB; connects lazily) |
+| `fxoee.wal.questdb.ilp` | `FXOEE_WAL_QUESTDB_ILP` | `http::addr=localhost:9000;` | ✅ QuestDB ILP-over-HTTP endpoint |
+| `fxoee.wal.snapshot.enabled` | `FXOEE_WAL_SNAPSHOT_ENABLED` | `false` | ✅ periodic + on-shutdown engine snapshot for bounded restart; recovery replays only the Archive tail |
+| `fxoee.wal.snapshot.file` | `FXOEE_WAL_SNAPSHOT_FILE` | `${java.io.tmpdir}/fxoee-engine.snapshot.json` | ✅ snapshot file path |
+| `fxoee.wal.snapshot.interval-ms` | `FXOEE_WAL_SNAPSHOT_INTERVAL_MS` | `30000` | ✅ snapshot cadence |
+
 ## Fill pipeline (FillQueue + persistence)
 
 The async fill hand-off between the engine and the DB writer. Only wired when `kafka.enabled=true`

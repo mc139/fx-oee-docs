@@ -1,6 +1,6 @@
 # Speed engine (fxoee.engine.mode=speed)
 
-_Last updated: 2026-06-13._
+_Last updated: 2026-06-14._
 
 > **Thread & architecture diagrams:** see [speed-engine-architecture.md](speed-engine-architecture.md) for a visual map of threads, the Disruptor ring, and command flow.
 
@@ -208,6 +208,53 @@ only when the admin actually changes it, and the facade emits the same `risk.rej
 metric. All other meters (`matching.latency`, `orders.placed.total`, `trades.volume.total`,
 `orderbook.depth`) keep their names and tags, so the Grafana dashboards work unchanged in either
 mode.
+
+## Durable trade history: the Aeron Archive WAL (ADR 0007)
+
+Speed mode has two mutually exclusive durability paths, chosen at boot by
+`fxoee.wal.aeron.enabled` ([SpeedEngineConfig.java](../src/main/java/com/fxoee/engine/speed/SpeedEngineConfig.java)):
+
+- **WAL off (default):** the engine answers, then the request thread defers to the Kafka /
+  `FillQueue` projection described above (`OrderPlaced` / `TradeExecuted` / `OrderMatched`,
+  `PendingFill` hand-off). This is the pre-ADR-0007 behaviour and still projects balances to Postgres.
+- **WAL on:** the engine attaches an `AeronWal` publisher and the facade is wired with a `null` Kafka
+  producer and a `null` `FillQueue`. The engine is now **authoritative for balances in the JVM**, and
+  the Aeron Archive is a **trade-history tape only**. No Kafka, no `FillQueue`.
+
+In WAL mode the durable record is written from the single engine thread, still zero allocation:
+
+```mermaid
+flowchart LR
+    SE["SpeedEngine<br/>(engine thread)"] -->|"encode fill into reused<br/>FillRecordData (SBE FillCodec)"| WP["WalPublisher.offer"]
+    WP -->|"Aeron IPC publication"| AR["Aeron Archive<br/>(durable WAL)"]
+    AR -->|"live subscription"| PJ["AeronWalProjector<br/>(poll thread)"]
+    PJ -->|"WalFillConverter.toTrade"| TS["TradeStore + WS TradeEvent"]
+    PJ -. "fxoee.wal.questdb.enabled" .-> QD["QuestDbTapeSink"]
+```
+
+- **Engine-stamped fill sequence.** Every fill carries a monotonic `fillSeq` stamped on the engine
+  thread ([SpeedEngine.java](../src/main/java/com/fxoee/engine/speed/SpeedEngine.java)). It is the WAL
+  ordering key and the source of the **deterministic, replay-stable** trade id
+  `WalIds.tradeId(seq) = UUID(0x54, seq)` (lot ids use `UUID(0, seq)`, a disjoint range). No random
+  UUIDs are minted on the hot path.
+- **The codec is shared, not duplicated.** Fills are encoded with
+  [FillCodec](../src/main/java/com/fxoee/engine/speed/wal/FillCodec.java) over an SBE schema generated
+  each build into `com.fxoee.engine.speed.wal.sbe` (not checked in). `FillRecordData` is reused per
+  publish so the engine thread allocates nothing.
+- **The projector owns the object work.** `AeronWalProjector` drains the live subscription off the
+  engine thread, converts each record to a `Trade` ([WalFillConverter](../src/main/java/com/fxoee/engine/speed/WalFillConverter.java)),
+  appends it to `TradeStore`, broadcasts a WebSocket `TradeEvent`, and (when
+  `fxoee.wal.questdb.enabled`) writes the QuestDB trade tape.
+
+### Bounded restart over the Archive (ADR 0006 + 0007)
+
+[Snapshotter.java](../src/main/java/com/fxoee/wal/Snapshotter.java) captures a consistent
+whole-engine snapshot in **one engine-thread command** (`captureSnapshot`): the live WAL position
+plus every account's cash, realized P&L and open lots, written to `SnapshotStore`. Because the
+recording position equals the engine-stamped fill sequence, recovery loads the snapshot and replays
+only the **tail** of the Archive past that cut, so restart cost is bounded by the trades since the
+last snapshot rather than the whole history. Run the path locally with
+`./scripts/dev-local-backend.sh --wal` (add `--questdb` for the tape).
 
 ## What is intentionally identical
 
