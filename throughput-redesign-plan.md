@@ -26,8 +26,29 @@
   the kubectl port-forward).
 - `scripts/deploy-all.sh` (kafka forward 9092→9093), `scripts/dev-local-backend.sh` (queue env vars).
 
-**`PersistenceWorker.java` is UNCHANGED** — the Phase-1 rewrite below was drafted but not applied.
-**Next step = Phase 1.**
+**Progress (branch `perf/throughput-phase1`):**
+- **Phase 0 — DONE** (commit `5f4d2fd`): producer/consumer tuning committed.
+- **Phase 1 — DONE** (commit `44cd5c6`): `PersistenceWorker` pipelined — per-batch `allOf().get(15s)`
+  join removed, sends fire-and-track via callbacks, `markPublished` batched off-path in
+  `flushPublished()`, failed sends re-enqueue the owning `PendingFill`. `OrderEventProducer.flush()`
+  added for graceful shutdown.
+- **Phase 2 — DONE**: account-keyed WAL. New `trades.byaccount` topic (32 partitions, key=accountId);
+  new `AccountFill` per-account leg event (`AccountFill.split(TradeExecuted)` → BUY/SELL/FEE_TAKER/
+  FEE_HOUSE); `PersistenceWorker` publishes per-leg with a per-event completion countdown gating
+  `markPublished`; `FillConsumer` rewritten to consume legs (one thread per partition ⇒ single-writer
+  per account) and delegate to `FillBatchRepository.flushLegs` — dedup claim (`fill_dedup` UNIQUE,
+  migration `V12`, `ON CONFLICT DO NOTHING … RETURNING`) **and** the projection in ONE transaction,
+  mirror applied AFTER commit (no snapshot/rollback). Dropped: `SELECT … FOR UPDATE`, `TreeMap` lock
+  ordering, the global synchronized dedup LRU (bottlenecks #2/#3/#4). Relay + no-queue engine
+  fallbacks now publish per-leg via `sendTradeLegsSync`. **910 tests green.**
+  - **Deviation from the plan, by design:** the **in-memory running `balance_after`** and the
+    **`ConsumerRebalanceListener` re-seed** are deferred to Phase 3. Phase 2 still computes
+    `balance_after` from a *non-locking* DB read (correct + lock-free under single-writer) and keeps
+    the `customer_account.account_balance` UPDATE. Phase 3 removes both the read and the UPDATE by
+    making `balance_after` a pure in-memory running sum — which is exactly where the rebalance re-seed
+    becomes load-bearing, so the two land together there.
+
+**Next step = Phase 3.**
 
 ### Diagnosis that motivated this (live metrics, real running instance)
 382s run, minikube + `kubectl port-forward`: **28.55M orders submitted, 28.45M rejected `OVERLOADED`
