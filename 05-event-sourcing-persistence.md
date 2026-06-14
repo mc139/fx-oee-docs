@@ -232,13 +232,52 @@ first-ever deploy onto an empty database behaves exactly like a fresh start.
 Operational verification on a live cluster (minikube / k3s): see the runbook
 [testing-event-sourcing-minikube.md](testing-event-sourcing-minikube.md).
 
+## Bounded warm restart (engine snapshots)
+
+The replay above is **unbounded**: it folds the *whole* `trade_events` log, so cold-start time grows
+with lifetime trade volume. [ADR 0006](adr/0006-engine-snapshots-bounded-restart.md) adds an optional
+snapshot layer (flag `fxoee.recovery.snapshots.enabled`, env `FXOEE_RECOVERY_SNAPSHOTS_ENABLED`,
+**default `false`**) that bounds it, while `trade_events` stays the durable WAL.
+
+`EngineSnapshotter` periodically captures each account's `{cash, realizedPnl, open lots, coveredSeq}`
+and publishes it to the **log-compacted** `engine.snapshots` topic (key = `accountId`, so only the
+latest per account is retained). On restart `SnapshotStore` loads that latest-per-account set, the
+engine is rebuilt with `TradingEngine.restore(...)` instead of from scratch, and only the WAL tail past
+the snapshot is replayed:
+
+```mermaid
+flowchart LR
+  ES["engine.snapshots<br/>(compacted, key=accountId)"] --> SS["SnapshotStore.loadLatest()"]
+  SS -->|"uniform cut?"| R["engine.restore(cash, realizedPnl, lots)"]
+  LOG[("trade_events")] -->|"seq &gt; coveredSeq ONLY"| TAIL["replay tail"]
+  R --> REC["reconcileReserved + restore resting orders"]
+  TAIL --> REC
+```
+
+`restore` rebuilds an account with **no** replay: it sets cash + realized P&L and re-opens each lot
+**preserving its id** (the speed engine re-opens at the lot's original `seq` via `SpeedPositions.restoreLot`),
+so a restored position closes against the same id in the log and the DB, with no `position_lot` drift.
+Locked margin is not stored; `reconcileReserved` recomputes it after, as in the full-replay path.
+
+**Consistency.** The engine matches *ahead* of the WAL (it matches, then `PersistenceWorker` assigns
+the `seq` and appends). A snapshot must reflect exactly the fills with `seq <= coveredSeq` or bounded
+replay double-counts or drops trades. So the snapshotter only commits a cut when the `FillQueue` is
+drained and `maxSeq` is unchanged across the capture; recovery only uses the snapshots when they form a
+**uniform cut** (every account present at one `coveredSeq`) and otherwise falls back to full replay. The
+feature is therefore safe but opt-in: a stale, missing, or disabled snapshot only ever costs a longer
+replay, never correctness. The remaining work to make this production-default (an engine-stamped
+sequence to close a sub-millisecond capture window, plus real-Kafka load validation) is recorded in
+[ADR 0006](adr/0006-engine-snapshots-bounded-restart.md).
+
 ## Test coverage
 
 | Layer | Test | What it covers |
 |-------|------|----------------|
 | Engine unit | `MatchingServiceCornerCasesTest.replayRoundTrip` | seed → replay 2 fills → reconcile → assert positions / cash / margin (engine only, no DB) |
 | Engine unit | `MatchingServiceCornerCasesTest.warmRestartRecoversRestingOrders` | filled position **and** resting LIMIT order both restored 1:1; `reserved == positions + resting` margin |
-| Bootstrap unit | `AccountBootstrapperTest` (7, Mockito) | fresh vs warm boot branch, resting-order rebuild + reconcile, the Kafka relay of `published=false` rows, bad-JSON tolerance, fallback to fresh start when no `TradeEventRepository` bean |
+| Bootstrap unit | `AccountBootstrapperTest` (9, Mockito) | fresh vs warm boot branch, resting-order rebuild + reconcile, the Kafka relay of `published=false` rows, bad-JSON tolerance, fallback to fresh start when no `TradeEventRepository` bean; **bounded restart**: uniform snapshot cut restores + replays only the tail, non-uniform falls back to full replay |
+| Engine unit | `MatchingServiceTest` / `SpeedMatchingServiceTest` `restore…` | `TradingEngine.restore` reproduces cash + lots + realized P&L + reconciled margin, lot ids round-trip (both engines) |
+| Snapshot unit | `EngineSnapshotterTest` (3, Mockito) | the consistency guard: publishes one snapshot per account only on a stable cut; skips when the queue is non-empty or `maxSeq` moves mid-capture |
 | Bootstrap IT | `WarmRestartIntegrationTest` (5, Testcontainers + EmbeddedKafka) | DB-to-engine glue: `trade_events` → `recoverFromLog` → `MatchingService.snapshot`; relay re-publish; **resting-order recovery** (incl. a partially-filled row); `RestingOrderRepository` upsert/update/delete; end-to-end submit → `PersistenceWorker` persist → restart → back on the book |
 
 See [doc 08 - Testing](08-testing.md#bootstrap--recovery-warm-restart-three-layers) for the suite map.

@@ -63,16 +63,24 @@
     (the plan's allowed option — uncontended now that each account is single-writer) and deferred the
     COPY/multi-row bulk-load (a throughput nicety, not a hotspot).
 
-- **Phase 4 — ASSESSED, NOT YET IMPLEMENTED (needs a dedicated session).** Phases 0–3 are committed and
-  the full suite (910) is green; Phase 4 was scoped but deliberately not crammed in, because a *correct*
-  implementation requires invasive, separately-validated changes:
-  1. **Engine position-restore API (both engines).** `TradingEngine` exposes read-side state (`cash`,
-     `lots`) to *build* a snapshot, but the only way it *rebuilds positions* today is `replayFill`
-     (replaying whole trades). Snapshot-based **bounded restart** therefore needs a new
-     `restore(account, cash, lots, reserved)` entry point in BOTH `MatchingService` and the fixed-point,
-     zero-alloc, single-writer `SpeedMatchingService` — the latter is delicate and must keep its
-     allocation/latency profile. Cash-only seeding (`seedForReplay`) is insufficient: without restoring
-     positions you must still replay the whole log, so the restart is not bounded.
+- **Phase 4 — FOUNDATION DONE (steps a–c), full Kafka-as-WAL deferred (step d).** Implemented + 919
+  tests green, gated behind `fxoee.recovery.snapshots.enabled` (default off). See
+  [ADR 0006](adr/0006-engine-snapshots-bounded-restart.md) and `docs/05`. Shipped:
+  (a) `TradingEngine.restore(account, cash, realizedPnl, lots)` in BOTH engines — the speed engine
+  re-opens lots at their original `seq` (`SpeedPositions.restoreLot`) so lot ids round-trip; unit-tested
+  both engines. (b) `EngineSnapshot` + `EngineSnapshotter` → log-compacted `engine.snapshots` +
+  `TradeEventRepository.maxSeq`/`findPayloadsAfterSeq`. (c) `SnapshotStore` + bounded `recoverFromLog`
+  (uniform snapshot cut → `restore` + replay only `seq > coveredSeq`; else full replay). `trade_events`
+  stays the durable WAL. **Adversarial review (4 lenses) confirmed one HIGH:** the snapshot CUT guard is
+  not airtight (an enqueue-lag window can publish a `coveredSeq` excluding an already-applied fill →
+  double-count on restart), and the engine-global lot-seq counter can be under-recovered. Both are facets
+  of the missing engine-stamped sequence (step d.1) and are why the feature is OFF by default; the
+  `restore` primitive itself is correct. Remaining (step d) needs:
+  1. **Engine-stamped monotonic sequence** on each fill (carried on the fill into the WAL) so the snapshot
+     cut is EXACT without the opportunistic guard — this closes the enqueue-lag double-count window found
+     in review — plus a persisted global lot-seq high-water so a snapshot restore cannot re-issue a
+     closed lot's id. This is the load-bearing prerequisite the gated snapshotter is waiting on. (The
+     `restore(...)` API itself, steps a–c, is already done.)
   2. **Replay source = a WHOLE-event WAL.** Replay reconstructs trades, but the Phase-2 `trades.byaccount`
      topic carries per-account *legs* across 32 partitions — reassembling them into ordered trades for
      replay is a cross-partition join. Kafka-as-WAL needs a whole-`TradeExecuted` WAL topic (or keep
@@ -82,12 +90,11 @@
   3. **Consistent snapshot cut** of the live single-writer engine tagged with the exact WAL offset, plus
      **real-Kafka load validation** (EmbeddedKafka can't exercise replication/retention/offset semantics).
 
-  Recommended execution order for the next session: (a) add + unit-test the engine `restore(...)` API in
-  both engines; (b) `EngineSnapshotter` → log-compacted `engine.snapshots` topic (balances + lots +
-  resting + covered WAL offset) using the read-side accessors; (c) rewrite `recoverFromLog` to load the
-  latest snapshot then replay only the tail (KEEP `trade_events` as the WAL first — bounded restart with
-  durability unchanged); (d) only then move durability to a whole-event Kafka WAL and drop the synchronous
-  `trade_events` append, validated under real-Kafka load. Each step independently shippable + testable.
+  Recommended next session (step d, on top of the a–c foundation): (1) add the engine-stamped fill
+  sequence + global lot-seq high-water above and switch the snapshot cut + tail-replay to order by it,
+  then flip `fxoee.recovery.snapshots.enabled` on under real Kafka; (2) move durability to a whole-event
+  Kafka WAL and drop the synchronous `trade_events` append, validated under real-Kafka load; (3) bound
+  WAL growth (trim rows below the minimum live `coveredSeq`). Each step independently shippable + testable.
 
 ### Diagnosis that motivated this (live metrics, real running instance)
 382s run, minikube + `kubectl port-forward`: **28.55M orders submitted, 28.45M rejected `OVERLOADED`
