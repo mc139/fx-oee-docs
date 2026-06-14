@@ -11,6 +11,7 @@ supersedes the old one rather than an edit.
 | [0001](0001-monolith-over-microservices.md) | Single Spring Boot monolith, not microservices | Accepted |
 | [0002](0002-in-memory-authoritative-engine.md) | In-memory matching engine is the source of truth; DB/Kafka are projections | Accepted |
 | [0003](0003-jooq-over-jpa.md) | jOOQ (codegen from migrated schema) over JPA/Hibernate | Accepted |
-| [0004](0004-async-fill-queue-over-disruptor.md) | Async fill hand-off: interim `ConcurrentLinkedQueue`, LMAX Disruptor planned | Accepted (interim) |
+| [0004](0004-async-fill-queue-over-disruptor.md) | Async fill hand-off: interim `ConcurrentLinkedQueue`, LMAX Disruptor planned | Superseded by 0005 |
+| [0005](0005-disruptor-adoption.md) | LMAX Disruptor for the speed-engine command ring and the fill hand-off (`ConcurrentLinkedQueue` fallback) | Accepted |
 
 Format: Status · Context · Decision · Consequences. Back to [docs index](../README.md).

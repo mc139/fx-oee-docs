@@ -1,8 +1,16 @@
 # 02 - Matching engine
 
-_Last updated: 2026-06-09 BST._
+_Last updated: 2026-06-13 BST._
 
-The matching engine is two classes per currency pair:
+There are two matching implementations, selected by `fxoee.engine.mode` (see
+[Architecture, Engine selection](01-architecture.md#engine-selection-default-vs-speed)). Both honour
+the same **price-time priority + maker pricing + STP cancel-newest** semantics; they differ only in
+data structures and concurrency. This document covers the **default** engine first, then the
+**speed** engine's [SpeedBook matching](#speed-engine-speedbook-matching).
+
+## Default engine
+
+The default matching engine is two classes per currency pair:
 [OrderBook.java](../src/main/java/com/fxoee/matching/OrderBook.java) (state) and
 [MatchingEngine.java](../src/main/java/com/fxoee/matching/MatchingEngine.java) (algorithm). They are
 pure and stateless beyond the book; `MatchingService` owns one pair of them per `CurrencyPair`.
@@ -114,8 +122,68 @@ A MARKET BUY has no limit price, so its margin can't be sized before the sweep. 
 depth under the same book lock to compute the exact sweep cost. See
 [Engine core](03-engine-core.md#market-buy-funding).
 
+## Speed engine: SpeedBook matching
+
+In speed mode (`fxoee.engine.mode=speed`) the per-pair `OrderBook`/`MatchingEngine` pair is replaced
+by one [SpeedBook](../src/main/java/com/fxoee/engine/speed/SpeedBook.java) per pair, matched **inside
+the single-writer engine thread** ([SpeedEngine.match](../src/main/java/com/fxoee/engine/speed/SpeedEngine.java)).
+It implements the **same price-time priority + maker pricing + STP cancel-newest** semantics as the
+default engine, with a different data structure and zero locks. ✅
+
+```mermaid
+flowchart LR
+    subgraph book["SpeedBook (one per pair, engine-thread confined, no locks)"]
+        bid["bestBid: Lvl chain<br/>descending price via .worse"]
+        ask["bestAsk: Lvl chain<br/>ascending price via .worse"]
+        lvl["each Lvl: FIFO Ord list<br/>(head/tail, intrusively linked)"]
+        byid["byId: Object2ObjectHashMap&lt;id, Ord&gt;<br/>O(1) cancel/find"]
+        byacct["acctHead/acctTail: Int2ObjectHashMap<br/>per-account Ord chain for reconcile"]
+        top["bestBidPx / bestAskPx: Disruptor Sequence<br/>lock-free top-of-book mirror"]
+    end
+```
+
+Key differences from the default `OrderBook`:
+
+- **No `TreeMap`, no locks.** Price levels are pooled `Lvl` nodes linked into a sorted chain per side
+  (`better` toward top of book, `worse` away); the best level is the chain head. Orders are pooled
+  `Ord` nodes intrusively linked FIFO within their level (price-time priority). All of it is owned by
+  the one engine thread, so no synchronization is needed.
+- **Pooled nodes, zero steady-state allocation.** `newOrd` / `freeOrd` and `newLvl` / `freeLvl`
+  recycle nodes; the Agrona open-addressing index maps (`byId`, `bidLevels`, `askLevels`, account
+  chains) allocate only on resize, which is why they are pre-sized (`fxoee.engine.speed.book-map-capacity`).
+- **Lock-free top of book.** `bestBidPx()` / `bestAskPx()` read a Disruptor `Sequence` written only by
+  the engine thread on every best-level change, so observers (mid-price, simulator) read the top of
+  book as a plain volatile without a ring round-trip.
+- **`byAccount` equivalent.** `firstForAccount(idx)` walks the per-account `Ord` chain, the speed
+  counterpart of the default `byAccount` index, used by reconcile.
+
+The matching algorithm itself is the identical five rules. `SpeedEngine.match(book, agg, out)` walks
+the opposite side best-first, stops a LIMIT when its price no longer crosses, and on each crossing
+level:
+
+1. **Price priority**: `bestLevel(!aggBuy)` is always the best opposite price.
+2. **Time priority**: it fills `best.head` first (FIFO within the level); a partially-filled maker
+   keeps its place (`noteFill` decrements the level aggregate without unlinking), and is only unlinked
+   when fully filled.
+3. **Partial fills**: it fills `min(agg.remaining, maker.remaining)`; the larger side keeps the
+   remainder.
+4. **MARKET remainder rejected (IOC)**: after the sweep, an unfilled MARKET aggressor is `REJECTED`
+   and never rests; a LIMIT remainder is `rest()`ed (mirrors the default `parkOrReject`).
+5. **STP cancel-newest**: when `maker.acctIdx == agg.acctIdx` (both non-MOCK), `match` returns `true`
+   immediately: the resting order is left intact and the aggressor's remaining quantity is cancelled
+   (`CANCELLED`), exactly as the default engine cancels the newest. Orders with the MOCK account index
+   (null accountId) are exempt.
+
+Execution is always at the **maker's `priceRaw`** (the fill records `maker.priceRaw`), never the
+aggressor's, matching the default engine's maker-pricing rule. The aggressor disposition
+(`FILLED` / `PARTIALLY_FILLED` / `PENDING` / `REJECTED` / `CANCELLED`) is decided after the sweep in
+`onSubmit`, mirroring `MatchingEngine.parkOrReject` + STP.
+
 ## Where this is tested
 
-`MatchingEngineTest`, `MatchingEngineParameterizedTest`, `MatchingEngineMarketSimulationTest`,
-`OrderBookTest`, and the perf benchmark `com.fxoee.perf.MatchingEngineBenchmark` (JMH). See
-[Testing](08-testing.md).
+Default engine: `MatchingEngineTest`, `MatchingEngineParameterizedTest`,
+`MatchingEngineMarketSimulationTest`, `OrderBookTest`, and the perf benchmark
+`com.fxoee.perf.MatchingEngineBenchmark` (JMH). Speed engine (`com.fxoee.engine.speed`):
+`SpeedBookTest`, `SpeedMatchingEngineTest`, `SpeedMatchingServiceTest`, plus
+`EngineDifferentialFuzzTest` which cross-checks the speed engine against the default engine for
+matching parity, and `SpeedMatchingBenchmark`. See [Testing](08-testing.md).

@@ -2,7 +2,17 @@
 
 _Last updated: 2026-06-09 BST._
 
-**Status:** Accepted (interim implementation) · **LMAX Disruptor migration planned**
+**Status:** Superseded by [ADR 0005](0005-disruptor-adoption.md)
+
+> **Superseded (2026-06-13):** the LMAX Disruptor migration described as "planned" below has
+> landed. The fill hand-off now runs on a bounded Disruptor ring buffer
+> ([`DisruptorFillQueue`](../../src/main/java/com/fxoee/engine/DisruptorFillQueue.java),
+> `fxoee.queue.type=disruptor`), with the `ConcurrentLinkedQueue` retained as the `default`
+> fallback ([`DefaultFillQueue`](../../src/main/java/com/fxoee/engine/DefaultFillQueue.java)).
+> See [ADR 0005](0005-disruptor-adoption.md) for the adoption decision. The body below is kept
+> verbatim as the historical record.
+
+**Original status:** Accepted (interim implementation) · **LMAX Disruptor migration planned**
 
 > **State of the codebase:** the async hand-off currently runs on a `ConcurrentLinkedQueue`
 > ([`FillQueue`](../../src/main/java/com/fxoee/engine/FillQueue.java)). The LMAX Disruptor

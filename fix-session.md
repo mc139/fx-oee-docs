@@ -1,9 +1,13 @@
-m# FIX Session
+# FIX Session
 
-FIX 4.4 gateway, **v1 implemented**. Accepts `NewOrderSingle (35=D)` and `OrderCancelRequest (35=F)`
-and replies with `ExecutionReport (35=8)` / `OrderCancelReject (35=9)`. Orders run through the same
-`OrderService.placeOrder` / `cancelOrder` path as the REST API, so matching, risk, and accounting
-behave identically.
+FIX gateway built on **quickfix-j 2.3.2** (the FIX 4.4 message set), **v1 implemented**. Accepts
+`NewOrderSingle (35=D)` and `OrderCancelRequest (35=F)` and replies with `ExecutionReport (35=8)` /
+`OrderCancelReject (35=9)`. Orders run through the same `OrderService.placeOrder` / `cancelOrder`
+path as the REST API, so matching, risk, and accounting behave identically.
+
+The library comes from two Maven artifacts (`pom.xml`): `org.quickfixj:quickfixj-core` and
+`org.quickfixj:quickfixj-messages-fix44`, both at version `2.3.2`. QuickFIX/J owns the session
+layer (Logon, Heartbeat, sequence numbers); the application logic lives in `FixApplication`.
 
 ## Enabling
 
@@ -28,7 +32,7 @@ CompIDs:
 | TargetCompID       | `FXOEE`              |
 | Socket host / port | `localhost` / `9876` |
 
-No FIX-level auth in v1 — any Logon is accepted.
+No FIX-level auth in v1: any Logon is accepted (`fromAdmin` does not reject).
 
 ## Components
 
@@ -40,19 +44,19 @@ No FIX-level auth in v1 — any Logon is accepted.
 
 ## Supported messages and tags
 
-### Inbound — NewOrderSingle (35=D)
+### Inbound: NewOrderSingle (35=D)
 
 | Tag | Field    | Required   | Notes                                                                            |
 |-----|----------|------------|----------------------------------------------------------------------------------|
 | 11  | ClOrdID  | yes        | Echoed back; stored as the order's `clientOrderId`                               |
-| 1   | Account  | **yes**    | Trading account **UUID**. v1 routes purely on this tag; missing/invalid → reject |
+| 1   | Account  | **yes**    | Trading account **UUID**. v1 routes purely on this tag; missing/invalid is rejected |
 | 55  | Symbol   | yes        | FIX form `EUR/USD`; mapped to `CurrencyPair` (`EUR_USD`)                         |
 | 54  | Side     | yes        | `1`=BUY, `2`=SELL                                                                |
 | 40  | OrdType  | yes        | `1`=MARKET, `2`=LIMIT                                                            |
 | 38  | OrderQty | yes        | Base-currency units                                                              |
 | 44  | Price    | LIMIT only | Required when OrdType=`2`                                                        |
 
-### Inbound — OrderCancelRequest (35=F)
+### Inbound: OrderCancelRequest (35=F)
 
 | Tag | Field       | Required | Notes                                                                               |
 |-----|-------------|----------|-------------------------------------------------------------------------------------|
@@ -62,7 +66,7 @@ No FIX-level auth in v1 — any Logon is accepted.
 | 1   | Account     | yes      | Account UUID owning the order                                                       |
 | 55  | Symbol      | yes      | Order's pair                                                                        |
 
-### Outbound — ExecutionReport (35=8)
+### Outbound: ExecutionReport (35=8)
 
 Sent for new-order outcomes and cancel confirmations. Key tags: `37` OrderID, `17` ExecID,
 `150` ExecType, `39` OrdStatus, `54` Side, `151` LeavesQty, `14` CumQty, `6` AvgPx, plus `32`/`31`
@@ -78,17 +82,24 @@ Status mapping (`OrderStatus` → ExecType / OrdStatus):
 | REJECTED         | `8` Rejected   | `8` Rejected         |
 | NEW / PENDING    | `0` New        | `0` New              |
 
-### Outbound — OrderCancelReject (35=9)
+### Outbound: OrderCancelReject (35=9)
 
 Sent when a cancel can't be honoured (unknown/terminal order, missing OrderID, bad account).
 Carries `434` CxlRejResponseTo=`1`, `39` OrdStatus, and `58` Text reason.
 
 ## Known limitations (v1)
 
-- **No FIX-level auth** — every Logon accepted; account taken from tag `1` with no ownership check.
-- **One terminal report per order** — matching is synchronous, so a single `8` is sent. No separate
-  `New` ack ahead of the fill, and resting-order fills are not streamed asynchronously later.
-- **In-memory session store** — sequence numbers reset on each Logon (`ResetOnLogon=Y`); no replay.
-- **No market data** — `MarketDataRequest (V)` / `MarketDataSnapshotFullRefresh (W)` not handled yet.
+- **No FIX-level auth.** Every Logon is accepted; the account is taken from tag `1` with no
+  ownership check (the UUID is used as-is to route into `OrderService`).
+- **One terminal report per order.** Matching is synchronous, so a single `8` is sent. There is no
+  separate `New` ack ahead of the fill, and resting-order fills are not streamed asynchronously later.
+- **In-memory session store.** `MemoryStoreFactory` is used and sequence numbers reset on each Logon
+  (`ResetOnLogon=Y` in `fix-acceptor.cfg`); there is no message replay across restarts.
+- **No market data.** `MarketDataRequest (V)` / `MarketDataSnapshotFullRefresh (W)` are not handled
+  (only the two typed `onMessage` handlers exist: `NewOrderSingle` and `OrderCancelRequest`).
 
 See [ADR-0004](adr/0004-async-fill-queue-over-disruptor.md) for the broader architectural context.
+
+---
+
+_Last updated: 2026-06-13._

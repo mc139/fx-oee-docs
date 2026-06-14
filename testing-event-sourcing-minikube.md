@@ -54,7 +54,8 @@ kubectl get configmap backend-config -n fx-oee \
 ```
 
 If this prints empty or `false`, the pod will fresh-start (wipe to 10 M) instead of replaying. Fix it
-in [k8s/backend/configmap.yaml](../k8s/backend/configmap.yaml) and re-apply
+in [k8s/base/backend/configmap.yaml](../k8s/base/backend/configmap.yaml) (key
+`FXOEE_RECOVERY_REPLAY_ON_STARTUP: "true"`, inherited by both overlays) and re-apply
 (`kubectl apply -k k8s/overlays/local` or `.../prod`), then roll the deployment.
 
 ## Section 3: End-to-end scenario

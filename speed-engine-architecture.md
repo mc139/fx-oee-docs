@@ -1,10 +1,10 @@
-# Speed Engine — Thread & Architecture Guide
+# Speed Engine: Thread & Architecture Guide
 
 _Last updated: 2026-06-13._
 
 This document is a **visual map** of how the speed engine runs: which threads exist, what each one owns, how commands flow through the Disruptor ring, and where work happens. It complements the deeper semantics guide in [speed-engine.md](speed-engine.md).
 
-Enable speed mode with `fxoee.engine.mode=speed` (or env `FXOEE_ENGINE_MODE=speed`). Spring wires everything in [SpeedEngineConfig.java](../src/main/java/com/fxoee/config/SpeedEngineConfig.java).
+Enable speed mode with `fxoee.engine.mode=speed` (or env `FXOEE_ENGINE_MODE=speed`). On this branch `performance.properties` sets it, and the k8s backend configmap sets `FXOEE_ENGINE_MODE: "speed"`, so speed mode is the active engine. Spring wires everything in [SpeedEngineConfig.java](../src/main/java/com/fxoee/engine/speed/SpeedEngineConfig.java).
 
 ---
 
@@ -12,11 +12,11 @@ Enable speed mode with `fxoee.engine.mode=speed` (or env `FXOEE_ENGINE_MODE=spee
 
 | Concept | What it means |
 |---------|----------------|
-| **Single writer** | One thread (`speed-engine`) owns all mutable trading state — no locks on the hot path |
+| **Single writer** | One thread (`speed-engine`) owns all mutable trading state, no locks on the hot path |
 | **Multi producer** | Any number of request threads can publish commands into the ring at once |
 | **Synchronous submit** | Each caller blocks on its own `ResultBuffer` until the engine answers |
 | **Edge conversion** | `BigDecimal` only on request threads; the engine thread uses fixed-point `long`s |
-| **LMAX pattern** | Same Disruptor library as the [fill queue](05-event-sourcing-persistence.md), but here it carries commands *into* the engine |
+| **LMAX pattern** | Same Disruptor library (LMAX Disruptor 4.0.0) as the [fill queue](05-event-sourcing-persistence.md), but here it carries commands *into* the engine |
 
 ---
 
@@ -55,7 +55,7 @@ flowchart TB
         WS --> DISPATCH --> SE --> STATE
     end
 
-    subgraph async["Downstream (separate threads — not on hot path)"]
+    subgraph async["Downstream (separate threads, not on hot path)"]
         FQ["FillQueue consumer"]
         PW["PersistenceWorker"]
         K["Kafka consumers"]
@@ -90,17 +90,17 @@ flowchart TB
 | **Engine** | `speed-engine` (daemon) | Sole mutator of books, positions, ledger | **No** (steady state) |
 | **Submitters** | Tomcat, WS, FIX, simulator, … | Convert `Order` → longs, publish, await, build reports/events | Yes (domain objects, events) |
 | **Observers** | WS snapshot schedulers, debug endpoints | Read book via `SpeedOrderBookView` → `EXEC` on engine thread | Yes (BigDecimal copies) |
-| **Projection** | `FillQueue` / `PersistenceWorker` / Kafka | Persist fills asynchronously | Yes (expected — off hot path) |
+| **Projection** | `FillQueue` / `PersistenceWorker` / Kafka | Persist fills asynchronously | Yes (expected, off hot path) |
 
 ### CPU pinning (optional)
 
-When `fxoee.engine.speed.cpu` is set (≥ 0), the engine thread is pinned to that core via OpenHFT Affinity. This keeps the single writer on one CPU and avoids cache-migration stalls. Default `-1` disables pinning (typical on macOS dev hosts).
+When `fxoee.engine.speed.cpu` is set (≥ 0), the engine thread is pinned to that core via OpenHFT Affinity (3.23.3). This keeps the single writer on one CPU and avoids cache-migration stalls. Pinning is Linux-only: on macOS dev hosts and other unsupported platforms `Affinity.setAffinity` is a no-op, and any failure is logged rather than allowed to kill the engine thread. `-1` disables it entirely. This branch sets `cpu=2` in `performance.properties`.
 
 ---
 
 ## Component map
 
-Who talks to whom — useful when tracing a stack trace.
+Who talks to whom, useful when tracing a stack trace.
 
 ```mermaid
 flowchart LR
@@ -156,7 +156,7 @@ flowchart LR
 
 ---
 
-## Order submit — end-to-end sequence
+## Order submit: end-to-end sequence
 
 Track one `submit(Order)` from HTTP to engine and back.
 
@@ -183,7 +183,7 @@ sequenceDiagram
     SMS->>RING: fill slot (SUBMIT, longs, out=rb)
     SMS->>EC: publishAndWait(ring, seq, rb)
     EC->>RING: publish(seq)
-    EC->>RB: await() — spin / yield / park
+    EC->>RB: await() spin, yield, park
 
     RING->>ET: onEvent(slot)
     ET->>ET: riskCheck
@@ -235,41 +235,44 @@ flowchart LR
 
 Every interaction with mutable state goes through an `EngineSlot` command. The engine thread dispatches in `SpeedEngine.onEvent()`.
 
+`EngineSlot.cmd` is one of five `byte` constants: `SUBMIT=0`, `BOOK_ADD=1`, `CANCEL=2`, `EXEC=3`, `MATCH_RAW=4`.
+
 ```mermaid
 flowchart TD
     PUB["Producer publishes EngineSlot"] --> DISPATCH{"cmd?"}
 
-    DISPATCH -->|SUBMIT| SUB["Full pipeline:<br/>risk → reserve → match → applyFills → reconcile"]
-    DISPATCH -->|CANCEL| CAN["Unlink order → reconcile account"]
-    DISPATCH -->|BOOK_ADD| BA["Rest order, no funds check<br/>(warm-restart recovery)"]
-    DISPATCH -->|MATCH_RAW| MR["Match + rest only<br/>(mock quotes, no funds/positions)"]
-    DISPATCH -->|EXEC| EX["Run Runnable on engine thread<br/>(reads, admin, snapshots)"]
+    DISPATCH -->|SUBMIT| SUB["onSubmit(funds=true):<br/>risk → reserve → match → applyFills → reconcile"]
+    DISPATCH -->|MATCH_RAW| MR["onSubmit(funds=false):<br/>match + rest only, no funds/positions/reconcile"]
+    DISPATCH -->|CANCEL| CAN["onCancel: unlink order → reconcile account"]
+    DISPATCH -->|BOOK_ADD| BA["onBookAdd: rest order, no funds check<br/>(warm-restart recovery)"]
+    DISPATCH -->|EXEC| EX["s.task.run() on engine thread<br/>(reads, admin, snapshots)"]
 
-    SUB --> DONE["out.markDone() if out != null"]
-    CAN --> DONE
-    MR --> DONE
-    BA --> CLEAR["slot.clear() only"]
-    EX --> CLEAR
-    DONE --> CLEAR
+    SUB --> FIN["finally:<br/>if out != null out.markDone()<br/>then s.clear()"]
+    MR --> FIN
+    CAN --> FIN
+    BA --> FIN
+    EX --> FIN
 ```
+
+The `finally` block in `onEvent` is uniform: it calls `out.markDone()` whenever `slot.out != null`, then always runs `slot.clear()`. Whether a caller waits is therefore decided by whether it set `slot.out`, not by the command type.
 
 | Command | `out` set? | Caller waits? | Typical caller |
 |---------|------------|---------------|----------------|
 | `SUBMIT` | Yes | Yes | `SpeedMatchingService.submit` |
-| `CANCEL` | Yes | Yes | `SpeedMatchingService.cancel`, `SpeedOrderBookView` |
-| `BOOK_ADD` | No | Yes (handler returns immediately) | Recovery, `SpeedOrderBookView.addOrder` |
+| `CANCEL` | Yes | Yes | `SpeedMatchingService.cancel`, `SpeedOrderBookView.cancelOrder` |
 | `MATCH_RAW` | Yes | Yes | `SpeedMatchingEngine.match` (mock quotes) |
-| `EXEC` | No* | Yes | `EngineClient.exec` — snapshots, `cash()`, book depth |
+| `BOOK_ADD` | Yes (via `command()`) | Yes | recovery, `SpeedOrderBookView.addOrder` (the handler ignores `out` but the caller still awaits `markDone`) |
+| `EXEC` | Yes (via `command()`) | Yes | `EngineClient.exec`: snapshots, `cash()`, book depth, `reconcileReserved` |
 
-\*Some `EXEC` tasks attach work to `slot.out` internally (e.g. `reconcileReserved`).
+Every caller goes through `EngineClient.command()` / `publishAndWait()`, both of which set `slot.out` to the thread-local `ResultBuffer` and `await()` it, so all five command types are synchronous round-trips. `BOOK_ADD` and `EXEC` simply leave the result arrays empty (or the `EXEC` task fills `slot.out` itself, e.g. `reconcileReserved` writes resting deletes).
 
-**Critical rule:** an `EXEC` task must **never** publish back to the ring. The single consumer cannot drain behind itself — a full ring deadlocks.
+**Critical rule:** an `EXEC` task must **never** publish back to the ring. The single consumer cannot drain behind itself, so a full ring deadlocks.
 
 ---
 
 ## Result handshake (request ↔ engine)
 
-Each submitting thread owns one reusable [ResultBuffer](../src/main/java/com/fxoee/engine/speed/ResultBuffer.java). Results never travel in the ring slot — only primitives and refs written into the caller's buffer.
+Each submitting thread owns one reusable [ResultBuffer](../src/main/java/com/fxoee/engine/speed/ResultBuffer.java). Results never travel in the ring slot, only primitives and refs written into the caller's buffer.
 
 ```mermaid
 stateDiagram-v2
@@ -310,7 +313,7 @@ All of this lives in [SpeedEngine](../src/main/java/com/fxoee/engine/speed/Speed
 
 ```mermaid
 flowchart TB
-    subgraph engine["speed-engine thread — sole owner"]
+    subgraph engine["speed-engine thread (sole owner)"]
         REG["AccountRegistry<br/>UUID → int idx"]
         LED["SpeedLedger<br/>cash[] · reserved[] · pending[acct][pair]"]
         POS["SpeedPositions<br/>FIFO lots · netQty · heldMargin"]
@@ -352,7 +355,7 @@ flowchart LR
 
 ## SUBMIT pipeline (engine thread detail)
 
-What `onSubmit()` does for a normal order — the inner loop of the architecture.
+What `onSubmit()` does for a normal order, the inner loop of the architecture.
 
 ```mermaid
 flowchart TD
@@ -399,7 +402,7 @@ flowchart LR
     end
 
     subgraph paths["How it reads"]
-        VOL["bestBidPx / bestAskPx<br/>volatile read — no round-trip"]
+        VOL["bestBidPx / bestAskPx<br/>volatile read, no round-trip"]
         EXEC["client.exec() → scan book on engine thread"]
         CMD["client.command(BOOK_ADD / CANCEL)"]
     end
@@ -416,11 +419,11 @@ flowchart LR
 | Read | Mechanism | Blocks engine? |
 |------|-----------|----------------|
 | `bestBid()` / `bestAsk()` | Volatile mirror on `SpeedBook` | No |
-| `depth()` gauge | `EXEC` — count levels | Briefly |
-| `getBids()` / `getAsks()` snapshot | `EXEC` — walk book, convert to `BigDecimal` | Briefly |
+| `depth()` gauge | `EXEC`: count levels | Briefly |
+| `getSnapshot()` bids/asks | `EXEC`: walk book, convert to `BigDecimal` | Briefly |
 | `cash()` / `netQty()` / `snapshot()` | `EXEC` on engine thread | Briefly |
 
-Reads cost microseconds — fine for 200 ms WebSocket snapshots; they never need locks because they run on the only mutator thread (or read volatiles it maintains).
+Reads cost microseconds, fine for 200 ms WebSocket snapshots; they never need locks because they run on the only mutator thread (or read volatiles it maintains).
 
 ---
 
@@ -464,20 +467,22 @@ flowchart TB
 
 - **Trading rules** are identical to default mode (see [speed-engine.md](speed-engine.md)).
 - **Metrics** keep the same names (`matching.latency`, `orders.placed.total`, …).
-- **Risk gate** runs long-native inside the engine thread (mirrors `InProcessRiskService`).
+- **Risk gate** runs long-native inside the engine thread, mirroring `InProcessRiskService`'s checks against the shared `RiskLimits` bean. The facade's `setRiskGate(RiskService, TradingStatusService)` only forwards `TradingStatusService` (the halt source) into the engine; `RiskService` itself is never called per order, since it would allocate request/decision records.
 
 ---
 
 ## Configuration quick reference
 
-| Property | Default | Effect |
-|----------|---------|--------|
-| `fxoee.engine.mode` | `default` | Set to `speed` to activate this architecture |
-| `fxoee.engine.speed.wait-strategy` | `busy-spin` | How the **engine thread** waits for ring events |
-| `fxoee.engine.speed.book-map-capacity` | `65536` | Agrona hash map capacity per `SpeedBook` |
-| `fxoee.engine.speed.cpu` | `-1` | CPU core to pin `speed-engine` (`-1` = off) |
+| Property | Default (binding) | On this branch | Effect |
+|----------|-------------------|----------------|--------|
+| `fxoee.engine.mode` | `default` | `speed` | Set to `speed` to activate this architecture |
+| `fxoee.engine.speed.wait-strategy` | `busy-spin` | (unset, so `busy-spin`) | How the **engine thread** waits for ring events: `busy-spin` / `yielding` / `blocking` |
+| `fxoee.engine.speed.book-map-capacity` | `65536` | `65536` | Agrona open-addressing map capacity per `SpeedBook` (five maps per book) |
+| `fxoee.engine.speed.cpu` | `-1` | `2` | CPU core to pin `speed-engine` via OpenHFT Affinity (`-1` = off; Linux only, no-op elsewhere) |
 
-Ring size is fixed at `65536` slots (`1 << 16`) in [SpeedEngineConfig](../src/main/java/com/fxoee/config/SpeedEngineConfig.java) — ~0.4 s burst at 150k orders/s.
+The defaults come from the `@Value` fallbacks in [SpeedEngineConfig](../src/main/java/com/fxoee/engine/speed/SpeedEngineConfig.java); `performance.properties` overrides them on this branch.
+
+The **command** ring size is a compile-time constant `RING_SIZE = 1 << 16` (`65536` slots) in `SpeedEngineConfig`, ~0.4 s of burst headroom at 150k orders/s. It is not configurable, and it is a different ring from the persistence-side `fxoee.disruptor.ring-buffer-size` (`1048576`), which sizes the `FillQueue` Disruptor between the facade and `PersistenceWorker`, not the engine command ring.
 
 ---
 
@@ -487,8 +492,8 @@ Use this when reading code or debugging:
 
 1. **Is this thread `speed-engine`?** → It may mutate `SpeedBook`, `SpeedPositions`, `SpeedLedger`.
 2. **Any other thread?** → Convert at the edge, publish a command, await `ResultBuffer`, build Java objects.
-3. **Need consistent read?** → `EngineClient.exec()` — never read engine arrays directly from Tomcat.
-4. **Inside `EXEC`?** → Never call `ring.publish()` — deadlock.
+3. **Need consistent read?** → `EngineClient.exec()`; never read engine arrays directly from Tomcat.
+4. **Inside `EXEC`?** → Never call `ring.publish()` (deadlock).
 5. **Who spins hot?** → Engine thread (busy-spin). Submitters park under load.
 6. **Where do results live?** → Caller's `ResultBuffer`, not the ring slot.
 7. **One core ceiling?** → All pairs share one writer; shard per pair is the scale-out path (future).

@@ -1,6 +1,6 @@
 # 09 - Deployment & operations
 
-_Last updated: 2026-06-09._
+_Last updated: 2026-06-13._
 
 The app ships as a single Docker image (`Dockerfile.backend`): Node build → Maven build → JRE. The
 **frontend is compiled into the backend JAR** (Spring Boot static resources), so there is no separate
@@ -340,7 +340,28 @@ port 80, and the backend is also reachable directly on 8080.
 
 ---
 
-## Configuration reference
+## ConfigMap (deployed defaults)
+
+The non-secret runtime knobs live in [backend-config](../k8s/base/backend/configmap.yaml) (`envFrom`
+into the backend container; secrets such as `TIINGO_API_KEY` come from `backend-secret`). Both the
+local and prod overlays inherit this base ConfigMap unchanged. The load-bearing values as deployed:
+
+| Key | Value | Notes |
+|-----|-------|-------|
+| `FXOEE_ENGINE_MODE` | `speed` | selects the zero-alloc long fixed-point engine (`fxoee.engine.mode`; see [speed-engine.md](speed-engine.md)). `default` falls back to the BigDecimal matching core |
+| `FXOEE_RECOVERY_REPLAY_ON_STARTUP` | `true` | warm restart: rebuild engine state from the `trade_events` log on every pod start instead of wiping to 10M (`fxoee.recovery.replay-on-startup`; see [doc 05](05-event-sourcing-persistence.md#warm-restart-recovery-engine-replay)). Idempotent; no-op on an empty DB |
+| `CIRCUIT_BREAKER_ENABLED` | `false` | circuit breaker disabled in-cluster |
+| `CIRCUIT_BREAKER_PRICE_DEVIATION_THRESHOLD` | `0.005` | trip threshold (0.5%) when the breaker is enabled |
+| `KAFKA_ENABLED` | `true` | event pipeline + persistence consumers on |
+| `TIINGO_ENABLED` / `MOCK_MARKET_ENABLED` | `true` / `true` | live Tiingo FX feed and the resting-liquidity mock maker both on |
+| `RISK_MAX_POSITION` / `RISK_MAX_ORDER_NOTIONAL` | `10000000` / `5000000` | pre-trade risk limits |
+
+> **Default vs deployed.** `fxoee.engine.mode` and `fxoee.recovery.replay-on-startup` both default to
+> the safe local/test value (`default` engine, fresh start) in
+> [application.yml](../src/main/resources/application.yml); the ConfigMap overrides them for the
+> cluster. The wiring is `@ConditionalOnProperty(fxoee.engine.mode, havingValue=speed)` in
+> `SpeedEngineConfig` (and the matching `havingValue=default, matchIfMissing=true` guards in
+> `EngineConfig` / `MatchingConfig`).
 
 All runtime knobs are environment variables consumed by
 [application.yml](../src/main/resources/application.yml). See

@@ -24,16 +24,24 @@ flowchart TB
         WSH["TradingWebSocketHandler"]
     end
 
-    subgraph engine["Matching core - com.fxoee.engine (pure Java, no Spring/Kafka/DB)"]
-        MS["MatchingService<br/>(source of truth)"]
-        ME["MatchingEngine + OrderBook<br/>(per pair)"]
-        PB["PositionBook<br/>(FIFO netting)"]
-        ML["MarginLedger<br/>(cash + locked margin)"]
-        PV["PreTradeValidator"]
+    subgraph engine["Matching core - com.fxoee.engine (pure Java, no Spring/Kafka/DB) - one engine active, fxoee.engine.mode"]
+        direction LR
+        subgraph def["default - lock-based"]
+            MS["MatchingService<br/>(source of truth)"]
+            ME["MatchingEngine + OrderBook<br/>(per pair, per-pair locks)"]
+            PB["PositionBook<br/>(FIFO netting)"]
+            ML["MarginLedger<br/>(cash + locked margin)"]
+        end
+        subgraph spd["speed - single-writer (Disruptor)"]
+            SMS["SpeedMatchingService<br/>(source of truth)"]
+            SE["SpeedEngine<br/>(EngineSlot command ring)"]
+            SB["SpeedBook + SpeedPositions<br/>+ SpeedLedger (fixed-point longs)"]
+        end
+        PV["PreTradeValidator + risk gate"]
     end
 
     subgraph async["Async projection - com.fxoee.engine / events"]
-        FQ["FillQueue"]
+        FQ["FillQueue<br/>(default ConcurrentLinkedQueue<br/>| disruptor ring)"]
         PW["PersistenceWorker"]
         LOG[("trade_events<br/>(append-only log)")]
         K{{"Kafka topics"}}
@@ -48,22 +56,32 @@ flowchart TB
 
     WS --> WSH
     REST --> OC & AC
-    WSH --> MS
-    OC --> MS
+    WSH --> MS & SMS
+    OC --> MS & SMS
     AC --> AS
     MS --> ME --> PB & ML
+    SMS --> SE --> SB
     MS --> PV
-    MS -- "PendingFill (~1µs)" --> FQ --> PW
+    SMS --> PV
+    MS -- "PendingFill" --> FQ
+    SMS -- "PendingFill" --> FQ
+    FQ --> PW
     PW -- "append then publish" --> LOG
     PW --> K
     K --> FC --> DB & AS
     K --> SC --> DB
 ```
 
-The **matching core** is authoritative. Everything downstream (the DB rows, the in-memory mirror,
-the WebSocket snapshots) is a **projection** that applies effects the engine already computed and
-stamped on each event. Projections never re-derive open/close or cash math, so they cannot drift
-from the engine. See [Event sourcing & persistence](05-event-sourcing-persistence.md).
+The **matching core** is authoritative, and there are two co-equal implementations of it selected at
+boot by `fxoee.engine.mode`: the **default** lock-based engine (`com.fxoee.matching` +
+`MatchingService`) and the **speed** single-writer engine (`com.fxoee.engine.speed`, an LMAX
+Disruptor command ring over fixed-point longs). Whichever is active, everything downstream (the DB
+rows, the in-memory mirror, the WebSocket snapshots) is a **projection** that applies effects the
+engine already computed and stamped on each event. Projections never re-derive open/close or cash
+math, so they cannot drift from the engine. The fill hand-off (`FillQueue`) is itself selectable
+(`fxoee.queue.type`: `default` `ConcurrentLinkedQueue` or `disruptor` ring). See
+[Event sourcing & persistence](05-event-sourcing-persistence.md), [Speed engine](speed-engine.md),
+and [ADR 0005](adr/0005-disruptor-adoption.md).
 
 ## Documentation map
 
@@ -81,11 +99,11 @@ from the engine. See [Event sourcing & persistence](05-event-sourcing-persistenc
 | [10 - Configuration reference](10-configuration.md) | Every env var / property, default, and whether it's wired |
 | [11 - Pre-trade risk controls](11-risk-controls.md) | `com.fxoee.risk` gate: kill-switch, notional/position/exposure limits, HALTED enforcement, runtime tuning, metrics |
 | [Speed engine](speed-engine.md) | `fxoee.engine.mode=speed`: single-writer Disruptor engine, fixed-point longs (JPY price scale 3), zero-allocation hot path, OrderBook views |
-| [Speed engine — threads & architecture](speed-engine-architecture.md) | Visual thread map, Disruptor flow, command types, state ownership, sequence diagrams |
+| [Speed engine: threads & architecture](speed-engine-architecture.md) | Visual thread map, Disruptor flow, command types, state ownership, sequence diagrams |
 | [Circuit breaker](circuit-breaker.md) | Price-deviation halts, status/reset endpoints, enforcement via the risk gate |
 | [Market data feed](market-data.md) | Tiingo live feed, MockMarketMaker (OU+GARCH), automatic weekend fallback, spread / stale-order metrics, DEBUG controls |
-| [FIX session](fix-session.md) | Planned FIX 4.4 gateway; dependency on classpath, no implementation yet |
-| [ADRs](adr/README.md) | Architecture Decision Records: monolith, in-memory engine, jOOQ, async fill queue |
+| [FIX session](fix-session.md) | quickfix-j 4.4 acceptor gateway (`FixGatewayConfig`, `FixApplication`), enabled with `fx.fix.enabled=true` (env `FIX_ENABLED`, off by default) |
+| [ADRs](adr/README.md) | Architecture Decision Records: monolith, in-memory engine, jOOQ, async fill queue (0004, superseded), LMAX Disruptor adoption (0005) |
 
 ## The seven currency pairs
 

@@ -42,7 +42,7 @@ The default engine pays three taxes on every order:
 The speed engine removes all three. Prices and amounts are plain `long`s ("price times 100000"),
 all mutable state belongs to a single thread so no locks exist, and every working structure
 (orders, price levels, result arrays) is pooled and reused so the GC has nothing to collect.
-This is the LMAX architecture: the same Disruptor library already used for the
+This is the LMAX architecture: the same Disruptor library (4.0.0) already used for the
 [fill queue](05-event-sourcing-persistence.md) now also carries orders **into** the engine.
 
 ## Fixed-point numbers: long with a scale
@@ -50,7 +50,9 @@ This is the LMAX architecture: the same Disruptor library already used for the
 A fixed-point number is just an integer plus an agreed position for the decimal point.
 `EUR/USD 1.08500` is stored as the long `108500` with scale 5. Adding two prices is one CPU
 instruction instead of a BigDecimal allocation. All conversions live in
-[Fixed.java](../src/main/java/com/fxoee/engine/speed/Fixed.java).
+[Fixed.java](../src/main/java/com/fxoee/engine/speed/Fixed.java). The per-pair price scale,
+tick, min-lot and margin-rate-in-micros constants are precomputed once at class load, indexed by
+`CurrencyPair.ordinal()`.
 
 | Quantity                             | Scale | Example                           |
 |--------------------------------------|-------|-----------------------------------|
@@ -65,9 +67,11 @@ instruction instead of a BigDecimal allocation. All conversions live in
 `0.001`, versus `0.0001` / `0.00001` for other pairs. Scale 3 for JPY-quote pairs therefore carries
 exactly the same market precision as scale 5 elsewhere.
 
-Rounding is HALF_UP like the default engine, and margin is rounded to whole cents like
+Rounding is HALF_UP like the default engine, and margin is rounded to whole cents (scale 2) like
 [Margin.java](../src/main/java/com/fxoee/engine/ledger/Margin.java). Products use
-`Math.multiplyExact`, so an overflow fails loudly instead of corrupting a ledger. The engines can
+`Math.multiplyExact`, so an overflow fails loudly instead of corrupting a ledger; the general
+`mulDivHalfUp` detects a 128-bit intermediate with `Math.multiplyHigh` and only then falls back to
+BigInteger (a cold branch, effectively unreachable for realistic order sizes). The engines can
 differ by at most 1 unit in the last place on double-rounded midpoints; they are independent
 engines, not bit-for-bit replicas.
 
@@ -236,7 +240,7 @@ the engine thread *notices* a freshly published command, set by
 | Strategy | Idle behaviour | Pickup latency | When |
 |----------|----------------|----------------|------|
 | `busy-spin` (default) | never sleeps, one core at 100% | sub-µs | throughput, benchmarking, low latency |
-| `yielding` | spins then `Thread.yield()` | the OS can deschedule the engine thread between orders — **≈250µs/order** on a single-threaded caller | mostly idle, want the core back |
+| `yielding` | spins then `Thread.yield()` | the OS can deschedule the engine thread between orders (**≈250µs/order** on a single-threaded caller) | mostly idle, want the core back |
 | `blocking` | parks, woken by a signal | highest | idle deployment that never benchmarks |
 
 ### Waiters park, they do not spin
@@ -264,37 +268,44 @@ no Spring/DB/Kafka), 12-core machine, busy-spin engine + parking waiters:
 
 | Workload | 1 thread | 32 threads | 64 threads | 96 threads |
 |----------|----------|------------|------------|------------|
-| **resting** (LIMITs that don't cross — books grow) | ~1.76 M/s | ~1.5 M/s | ~1.5 M/s | ~1.5 M/s |
+| **resting** (LIMITs that don't cross, books grow) | ~1.76 M/s | ~1.5 M/s | ~1.5 M/s | ~1.5 M/s |
 | **matching** (orders cross and fill) | ~50 k/s | ~440 k/s | ~595 k/s | ~660 k/s |
 
 Run it: `mvn -q test-compile` then
-`java -cp target/test-classes:target/classes:$(cat cp.txt) com.fxoee.engine.speed.SpeedEngineBench <threads> <seconds> <rest|cross>`
-(build `cp.txt` with `mvn dependency:build-classpath -Dmdep.outputFile=cp.txt`).
+`java -cp "target/test-classes:target/classes:$(mvn -q dependency:build-classpath -Dmdep.outputFile=/dev/stdout)" com.fxoee.engine.speed.SpeedEngineBench <threads> <seconds> <rest|cross>`.
 
 Two things to read off the table:
 
 - **Resting orders run at ~1.5 M/s** because a LIMIT that rests without filling changes no position
-  and `reserve()` already locked its exact margin — so the engine **skips the post-match reconcile
+  and `reserve()` already locked its exact margin, so the engine **skips the post-match reconcile
   entirely** (see below). The order is O(1).
 - **Matching orders cap at ~660 k/s.** Each fill changes a position, so the reconcile must run; the
   engine's service time is then ~1.5 µs/order and it saturates around 600 k/s. A *single* `submit()`
   is a synchronous round-trip (~latency-bound), so you need **many concurrent submitters** (64+) to
-  drive the engine to that ceiling — one thread alone is latency-bound, not throughput-bound.
+  drive the engine to that ceiling: one thread alone is latency-bound, not throughput-bound.
 
 ### What makes it fast (the optimisations that matter)
 
-1. **Skip reconcile on a clean rest.** A LIMIT that rests with no fills needs no reconcile —
-   `reserve()` already set the authoritative reservation. This alone took the resting workload from
+1. **Skip reconcile on a clean rest.** A LIMIT that rests with no fills needs no reconcile:
+   `reserve()` already set the authoritative reservation, and `recordCleanRest` bumps the per-pair
+   margin cache in O(1). This alone took the resting workload from
    ~40 k/s to ~1.5 M/s. Reconcile only runs when a fill changed a position or the order didn't rest.
 2. **Incremental position accounting.** `netQty` and `heldMargin` are O(1) counters updated on each
    fill ([SpeedPositions](../src/main/java/com/fxoee/engine/speed/SpeedPositions.java)), not O(lots)
-   rescans — so reserve / risk / reconcile never walk the lot lists.
+   rescans, so reserve / risk / reconcile never walk the lot lists.
 3. **Top-of-book mirror** (above): best bid/ask are volatile longs, so observers' `mid()` reads cost
    nothing instead of a per-order engine round-trip.
 4. **Reconcile fast path:** when an account's resting orders all fit in cash (the common case), skip
-   the O(k²) priority sort — `held + Σ margins`, done.
-5. **Zero-alloc submit:** the ring slot is filled inline (no capturing lambda per order); the engine
-   thread touches only primitives and pooled book nodes.
+   the oldest-first priority sort: `held + Σ pending margins`, done.
+5. **Zero-alloc engine thread:** the ring slot is filled inline (no capturing lambda per order); the
+   engine thread touches only primitives, pooled book nodes, and reused scratch arrays, so steady
+   state allocates nothing on the matching path. The *submit thread* still allocates the shared,
+   BigDecimal-carrying event and report objects (`Trade`, `TradeExecuted`, `OrderMatched`,
+   `OrderPlaced`, `ExecutionReport`, `PendingFill`, lot events) plus the `Order` to-raw edge
+   conversion. Those are deferred (marked `TODO(alloc-tier3)` in
+   [SpeedMatchingService.java](../src/main/java/com/fxoee/engine/speed/SpeedMatchingService.java)):
+   removing them means carrying raw longs through the Kafka/DB/persistence contracts, which is out
+   of scope for the JVM-only pass.
 
 ### Driving it from the app
 
@@ -309,19 +320,27 @@ below the standalone numbers.
 Every order still funnels through **one** engine thread, so matching throughput is bounded by a
 single core (~600 k/s of *filling* orders here). The default engine locks *per pair* and matches
 seven pairs in parallel, so on a multi-pair fill-heavy load it can use more cores. To raise the speed
-engine past one core you **shard it** — one writer thread per pair (or pair group), each with its own
-ring — the idiomatic LMAX scale-out. The catch is shared cross-pair account state (ledger + positions
+engine past one core you **shard it**: one writer thread per pair (or pair group), each with its own
+ring, the idiomatic LMAX scale-out. The catch is shared cross-pair account state (ledger + positions
 + reconcile); clean sharding needs account-affinity routing or a different reconcile design. That is
 the next iteration, not a toggle.
 
 ## Status and caveats
 
-- **No dedicated tests yet** (deliberate, next phase). The full default-mode suite (724 tests) is
-  green; forcing the integration tests into speed mode boots the context and passes every test
-  that does not autowire the concrete `MatchingService` type (e.g. `OrderLifecycleIntegrationTest`,
-  62 tests, passes in speed mode and asserts reserved/funding correctness).
+- **Dedicated unit tests now exist** under
+  [`src/test/java/com/fxoee/engine/speed/`](../src/test/java/com/fxoee/engine/speed/): unit suites
+  for `Fixed`, `SpeedBook`, `SpeedLedger`, `SpeedPositions`, `AccountRegistry`, `ResultBuffer`,
+  `EngineSlot`, `EngineClient`, `SpeedOrderBookView`, `SpeedMatchingEngine`, and `SpeedMatchingService`,
+  plus an `EngineDifferentialFuzzTest` that runs randomized order flows through both engines and
+  asserts they agree on the funded happy path. `SpeedSubmitAllocProbe` measures per-order submit-thread
+  byte allocation via `ThreadMXBean`.
+- The full default-mode suite is green; forcing the integration tests into speed mode boots the
+  context and passes every test that does not autowire the concrete `MatchingService` type (e.g.
+  `OrderLifecycleIntegrationTest`, which asserts reserved/funding correctness).
 - The test profile (`src/test/resources/application.yml`) does **not** import
   `performance.properties`; tests run the default engine unless `fxoee.engine.mode` is injected
   (env var or `SPRING_APPLICATION_JSON`).
-- Numbers above are from the standalone harness; a JMH comparison of the two engines under both single-threaded
-  and concurrent load is the natural follow-up.
+- Numbers above are from the standalone harness
+  ([SpeedEngineBench](../src/test/java/com/fxoee/engine/speed/SpeedEngineBench.java), a runnable
+  `main`); a JMH comparison of the two engines under both single-threaded and concurrent load is the
+  natural follow-up.

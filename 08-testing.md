@@ -1,10 +1,18 @@
 # 08 - Testing
 
-_Last updated: 2026-06-09 BST._
+_Last updated: 2026-06-13 BST._
 
 The engine is tested as a **pure unit**: `EngineTestSupport.newService(mode)` wires a fully in-memory
 `MatchingService` (all 7 pairs, no Spring/Kafka/DB) so tests run in milliseconds. Maven is the build
-tool (`mvn test`).
+tool (`mvn test`). The suite is **71 `*Test.java` classes** (`find src/test -name '*Test.java' | wc -l`);
+JMH/benchmark harnesses (`SpeedMatchingBenchmark`, `SpeedEngineBench`, `SpeedSubmitAllocProbe`,
+`MatchingEngineBenchmark`, `OrderBookBenchmark`) are not `*Test.java` and are excluded from that count.
+
+Two engine implementations sit behind the `fxoee.engine.mode` toggle (`default` | `speed`, see
+[doc 03](03-engine-core.md) and [speed-engine.md](speed-engine.md)). The default engine is exercised
+by the `com.fxoee.engine` / `com.fxoee.matching` suites; the zero-alloc long fixed-point speed engine
+has its own `com.fxoee.engine.speed` suite (below) plus a **differential fuzz** test that asserts the
+two engines agree observable-for-observable.
 
 ## Suite map
 
@@ -16,7 +24,6 @@ flowchart TB
         c3["InvariantConservationTest<br/>§13 invariants over a session"]
         c4["SpecWorkedExamplesTest<br/>spec §6 worked examples"]
         c5["EngineConservationFuzzTest ★<br/>1500 randomized orders, invariants every step"]
-        c6["EnginePerformanceTest ★<br/>throughput floors"]
     end
     subgraph units["Component units"]
         u1["PositionBookTest + PositionBookCornerCasesTest ★"]
@@ -32,9 +39,24 @@ flowchart TB
         m4["OrderBookTest"]
         m5["OrderFundsValidatorTest"]
     end
-    subgraph perf["Perf - com.fxoee.perf"]
+    subgraph speed["Speed engine - com.fxoee.engine.speed (182 tests)"]
+        s1["FixedTest (20)<br/>fixed-point math + fuzz vs money oracle"]
+        s2["SpeedBookTest (30)<br/>pooled long fixed-point book"]
+        s3["SpeedLedgerTest (26)<br/>cash + margin ledger"]
+        s4["SpeedPositionsTest (12)<br/>FIFO-netting lot store + P&L"]
+        s5["ResultBufferTest (15)<br/>columnar reusable result container"]
+        s6["AccountRegistryTest (10)<br/>UUID ↔ dense-int mapping"]
+        s7["SpeedOrderBookViewTest (20)<br/>OrderBook-compatible read view"]
+        s8["EngineClientTest (5) + EngineSlotTest (6)<br/>request-thread handshake, ring-slot clear()"]
+        s9["SpeedMatchingEngineTest (7) + SpeedMatchingServiceTest (29)<br/>engine core + facade lifecycle"]
+        s10["EngineDifferentialFuzzTest (2) ◆◆<br/>default vs speed agree on every observable"]
+    end
+    subgraph perf["Perf - com.fxoee.perf + com.fxoee.engine.speed (benchmarks, not unit tests)"]
         p1["MatchingEngineBenchmark (JMH)"]
         p2["MatchingEnginePerfTest"]
+        p3["EnginePerformanceTest ★<br/>throughput floors"]
+        p4["EnginePerfReportTest<br/>both engines → HTML report (-DPerformance)"]
+        p5["SpeedMatchingBenchmark / SpeedEngineBench (JMH)<br/>SpeedSubmitAllocProbe (B/op probe)"]
     end
     subgraph boot["Bootstrap / recovery - com.fxoee.bootstrap"]
         b1["AccountBootstrapperTest ★<br/>fresh vs warm start, resting rebuild, relay, bad JSON, missing repo (Mockito)"]
@@ -52,6 +74,7 @@ flowchart TB
 
 ★ = added in the comprehensive-tests pass (34 tests). The rest predate it.
 ◆ = the `com.fxoee.it` end-to-end suite (see [End-to-end pipeline tests](#end-to-end-pipeline-tests)).
+◆◆ = the cross-engine differential oracle (see [Speed-engine suite](#speed-engine-suite)).
 
 ## What the invariant/fuzz tests assert
 
@@ -81,6 +104,36 @@ Determinism: the seed is fixed, so any failure reproduces exactly.
 - **MatchingService**: MARKET SELL open, USD/JPY round-trip conservation, warm-restart replay
   round-trip, **warm-restart recovers resting orders 1:1** (filled position and resting LIMIT both
   restored, full margin re-locked), `forceFlat`, `closeLot`, USD-base taker fee, snapshot view.
+
+## Speed-engine suite
+
+The speed engine (`com.fxoee.engine.speed`, behind `fxoee.engine.mode=speed`) is a zero-alloc long
+fixed-point rewrite of the matching core. Its classes are package-private and engine-thread confined,
+so every test lives in the same package and touches them directly (no Spring, no Kafka, no DB). The
+suite is **182 test methods across 12 classes**:
+
+| Class | Tests | What it pins down |
+|-------|-------|-------------------|
+| `FixedTest` | 20 | the fixed-point arithmetic core, including fuzz comparisons against a money oracle built from `Margin.usd` and the default engine's taker-fee formula (`notional × 0.001`, scale 8 HALF_UP) |
+| `SpeedBookTest` | 30 | `SpeedBook`, the pooled long fixed-point order book |
+| `SpeedLedgerTest` | 26 | `SpeedLedger`, the long fixed-point cash + margin ledger |
+| `SpeedPositionsTest` | 12 | `SpeedPositions`, the FIFO-netting lot store; realized P&L asserted against `Fixed.pnlUsdRaw` |
+| `ResultBufferTest` | 15 | `ResultBuffer`, the caller-owned reusable columnar result container (fill/upsert/delete columns, bit-packed flags) |
+| `AccountRegistryTest` | 10 | `AccountRegistry`, the UUID ↔ dense-int mapping |
+| `SpeedOrderBookViewTest` | 20 | `SpeedOrderBookView`, the `OrderBook`-compatible read view routed through the engine thread |
+| `EngineClientTest` | 5 | `EngineClient`, the request-thread handshake against a live `SpeedEngine` (thread-local buffer, `exec` visibility) |
+| `EngineSlotTest` | 6 | `EngineSlot.clear()`, the command-aware ref-dropping hook so the reusable ring slot never pins request data |
+| `SpeedMatchingEngineTest` | 7 | the engine core: mock-maker resting vs crossing, `matchRaw` leaves cash/reserved/positions untouched |
+| `SpeedMatchingServiceTest` | 29 | the `SpeedMatchingService` facade lifecycle over a live engine: crossing/funding/cancel/STP/per-pair reconcile, market + partial fills, close/forceFlat/reset, warm-restart replay, JPY scale-3 |
+| `EngineDifferentialFuzzTest` ◆◆ | 2 | **differential oracle**: feeds the default `MatchingService` and the speed `SpeedMatchingService` (seeded identically, `producer=null`, `fillQueue=null`, no risk gate) the same pseudo-random LIMIT/cancel stream and asserts they agree on report status, per-trade (price, qty, aggressor side), positions (netQty + lots), and all monetary fields within ±0.01 (once in margin-locked funding mode, once in full-notional mode) |
+
+`EngineDifferentialFuzzTest` is the load-bearing one: it proves the speed engine is observationally
+equivalent to the reference engine, so the rest of the docs' semantics apply unchanged in speed mode.
+
+```bash
+mvn -o test -Dtest='com.fxoee.engine.speed.*Test'   # whole speed suite, offline, no daemon leak
+mvn -o test -Dtest='EngineDifferentialFuzzTest'     # just the cross-engine oracle
+```
 
 ## Bootstrap / recovery: warm restart, three layers
 
@@ -156,7 +209,15 @@ not to micro-benchmark. Representative measurements on the dev machine:
 | `PositionBook.applyFill` | > 100k ops/sec | ~4.4M ops/sec |
 | `MatchingService.submit` | > 5k orders/sec | ~218k orders/sec |
 
-For real micro-benchmarks use the JMH harness in `com.fxoee.perf.MatchingEngineBenchmark`.
+For real micro-benchmarks use the JMH harnesses: `com.fxoee.perf.MatchingEngineBenchmark` (default
+engine), and `com.fxoee.engine.speed.SpeedMatchingBenchmark` / `SpeedEngineBench` (speed engine).
+`SpeedSubmitAllocProbe` measures submit-thread bytes-per-op via `ThreadMXBean`. `EnginePerfReportTest`
+benchmarks **both** engines in one fork-sweep and renders a self-contained HTML report under
+`target/` with a `GCProfiler` allocation column; it runs only when `-DPerformance` is passed:
+
+```bash
+mvn test -DPerformance -Dtest='EnginePerfReportTest'   # both engines → target/*.html
+```
 
 ## Running
 
