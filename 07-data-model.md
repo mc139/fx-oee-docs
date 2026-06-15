@@ -1,6 +1,6 @@
 # 07 - Data model
 
-_Last updated: 2026-06-13 BST._
+_Last updated: 2026-06-09 BST._
 
 Two data models coexist: the **in-memory domain** the engine operates on, and the **PostgreSQL
 schema** the projection writes. They are deliberately separate; the DB is a read-model, not the
@@ -20,8 +20,6 @@ classDiagram
         BigDecimal remainingQuantity
         OrderStatus status
         UUID accountId
-        String clientOrderId
-        Instant timestamp
         +fill(qty)
         +cancel()
         +reject()
@@ -35,7 +33,6 @@ classDiagram
         UUID sellAccountId
         BigDecimal price
         BigDecimal quantity
-        OrderSide aggressorSide
     }
     class PositionLot {
         String id

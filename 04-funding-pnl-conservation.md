@@ -1,6 +1,6 @@
 # 04 - Funding, P&L & conservation
 
-_Last updated: 2026-06-13 BST._
+_Last updated: 2026-06-09 BST._
 
 All monetary values in the engine are **USD**. This doc covers how dollars are computed: the margin
 requirement, the two funding modes, P&L conversion (which differs for USD-base pairs), the taker fee,
@@ -81,32 +81,6 @@ flowchart TD
 Fees are zero-sum across `taker + house`, so they don't break conservation (see below). USD-base
 example: a 1000-unit USD/JPY fill → fee `1000 × 0.001 = 1.00 USD`
 (`MatchingServiceCornerCasesTest.takerFeeUsdBase`).
-
-## Speed-engine mirror: the same money math in fixed-point
-
-The default engine above uses `BigDecimal`. The speed engine (`fxoee.engine.mode=speed`) recomputes
-all three money operations - margin requirement, P&L conversion, taker fee - in branch-free `long`
-fixed-point so the hot path never allocates. The scales are pinned in
-[Fixed](../src/main/java/com/fxoee/engine/speed/Fixed.java):
-
-| Quantity | Scale | Example |
-|----------|-------|---------|
-| Money (USD) | 8 (`MONEY_SCALE`) | `1.00000000 USD == 100_000_000` |
-| Quantity (base units) | 2 (`QTY_SCALE`) | |
-| Price | 5 for non-JPY-quote, **3 for JPY-quote** (USD/JPY) | `PRICE_SCALE[pair]` |
-| Margin rate | 6 (micros) | `0.05 → 50_000` |
-
-The mirror is exact-by-construction, not a re-derivation:
-
-- `Fixed.marginUsdRaw` mirrors `Margin#usd`: notional (USD-base = qty, else qty × price), then
-  `× marginRate` in `MARGIN` mode, then **cent-rounded** (`roundToCent`, scale 2, HALF_UP) like the
-  default engine's `setScale(2, HALF_UP)`.
-- `Fixed.pnlUsdRaw` mirrors `PositionBook.pnlUsd`: USD-quote pairs are already USD; USD-base pairs
-  divide by close price (the same ÷close logic, same defensive `closePrice ≤ 0` branch).
-- `Fixed.takerFeeRaw` mirrors `computeTakerFee`: notional `/ 1000` (= 0.1%) at money scale, HALF_UP.
-
-Rounding is HALF_UP throughout. Because both engines double-round independently, they may differ by
-**≤ 1 ulp** on midpoint cases - they are independent engines, not bit-for-bit replicas.
 
 ## The conservation invariant
 

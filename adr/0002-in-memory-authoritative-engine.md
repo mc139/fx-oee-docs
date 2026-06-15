@@ -38,20 +38,15 @@ Durability and the read-model are decoupled and derived:
 
 Locking is **fine-grained**: one `ReentrantLock` per pair (book) and one per account (positions),
 with reconcile run outside book locks to avoid an ABBA deadlock (see [doc 01](../01-architecture.md)
-for the locking model). This is the **default engine** (`fxoee.engine.mode=default`). A co-equal
-**speed engine** (`fxoee.engine.mode=speed`) keeps the same memory-authoritative model but replaces
-the locks with a single-writer LMAX Disruptor command ring, where the lock-free guarantee comes from
-having exactly one matching thread (see [ADR 0005](0005-disruptor-adoption.md) and
-[speed-engine.md](../speed-engine.md)). The LMAX Disruptor also backs the post-match fill hand-off,
-which is orthogonal to the matching model either way.
+for the locking model). The planned LMAX Disruptor ([ADR 0004](0004-async-fill-queue-over-disruptor.md))
+targets the post-match fill hand-off, not the matching loop itself, so it is orthogonal to this lock
+design.
 
 ## Consequences
 
 **Positive**
-- Matching is memory-speed with no DB on the critical path. Default-engine baseline: ~218k
-  `submit`/sec, ~4.4M `applyFill`/sec (`EnginePerformanceTest`). The speed engine, driven through its
-  Disruptor ring with concurrent submitters (`SpeedEngineBench`, no Spring/DB/Kafka, 12-core), runs
-  resting LIMITs at ~1.5M/sec and crossing-and-filling orders at ~660k/sec.
+- Matching is memory-speed (measured ~218k `submit`/sec, ~4.4M `applyFill`/sec in
+  `EnginePerformanceTest`), with no DB on the critical path.
 - Engine, DB, and mirror cannot diverge: all three derive from one committed log.
 - Warm restart with no data loss and no invented trades (crash-before-insert = never happened;
   crash-after-insert = re-published idempotently).

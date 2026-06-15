@@ -1,6 +1,6 @@
 # Architecture Decision Records
 
-_Last updated: 2026-06-14 BST._
+_Last updated: 2026-06-09 BST._
 
 Each ADR captures one significant decision: the context that forced it, the choice made, and the
 consequences accepted. They are immutable once accepted; a reversed decision gets a new ADR that
@@ -11,9 +11,6 @@ supersedes the old one rather than an edit.
 | [0001](0001-monolith-over-microservices.md) | Single Spring Boot monolith, not microservices | Accepted |
 | [0002](0002-in-memory-authoritative-engine.md) | In-memory matching engine is the source of truth; DB/Kafka are projections | Accepted |
 | [0003](0003-jooq-over-jpa.md) | jOOQ (codegen from migrated schema) over JPA/Hibernate | Accepted |
-| [0004](0004-async-fill-queue-over-disruptor.md) | Async fill hand-off: interim `ConcurrentLinkedQueue`, LMAX Disruptor planned | Superseded by 0005 |
-| [0005](0005-disruptor-adoption.md) | LMAX Disruptor for the speed-engine command ring and the fill hand-off (`ConcurrentLinkedQueue` fallback) | Accepted |
-| [0006](0006-engine-snapshots-bounded-restart.md) | Engine snapshots + bounded warm restart (`trade_events` stays the WAL; full Kafka-as-WAL deferred) | Accepted |
-| [0007](0007-aeron-archive-wal-questdb-tape.md) | Aeron Archive WAL + SBE + clean speed-engine rewrite + QuestDB tape (replaces the Kafka durability path) | Accepted |
+| [0004](0004-async-fill-queue-over-disruptor.md) | Async fill hand-off: interim `ConcurrentLinkedQueue`, LMAX Disruptor planned | Accepted (interim) |
 
 Format: Status · Context · Decision · Consequences. Back to [docs index](../README.md).

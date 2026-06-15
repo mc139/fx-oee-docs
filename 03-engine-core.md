@@ -1,18 +1,10 @@
 # 03 - Engine core
 
-_Last updated: 2026-06-13 BST._
+_Last updated: 2026-06-09 BST._
 
-This is the spine of the system. The active engine is the **source of truth**; everything else
-projects from it. There are two co-equal implementations behind the
-[TradingEngine](../src/main/java/com/fxoee/engine/TradingEngine.java) interface, selected by
-`fxoee.engine.mode` (see [Architecture, Engine selection](01-architecture.md#engine-selection-default-vs-speed)).
-This document covers the **default** [MatchingService](../src/main/java/com/fxoee/engine/MatchingService.java)
-first, then the **speed** engine's [submit path](#speed-engine-submit-path). Both apply the same
-five logical phases and emit the same projection events.
-
-## Default engine
-
-`MatchingService` coordinates five collaborators, all pure (no Spring/Kafka/DB):
+This is the spine of the system. [MatchingService](../src/main/java/com/fxoee/engine/MatchingService.java)
+is the **source of truth**; everything else projects from it. It coordinates five collaborators, all
+pure (no Spring/Kafka/DB):
 
 | Collaborator | Responsibility | Source |
 |--------------|----------------|--------|
@@ -133,80 +125,6 @@ flowchart TD
     sort --> fund["reserved = held<br/>for each pending: if reserved+margin ≤ cash keep,<br/>else flag UNFUNDED → cancel"]
     fund --> set["ledger.setReserved(account, reserved)"]
 ```
-
-## Speed engine submit path
-
-In speed mode (`fxoee.engine.mode=speed`) the same five phases run, but the request thread does almost
-none of the work: it converts the order to fixed-point longs, hands a command to the single-writer
-[SpeedEngine](../src/main/java/com/fxoee/engine/speed/SpeedEngine.java) thread over a Disruptor ring,
-and the engine thread runs structural-aware reservation, matching, fill application, and reconcile
-**without any lock** (it owns all state). The facade
-[SpeedMatchingService.submit](../src/main/java/com/fxoee/engine/speed/SpeedMatchingService.java)
-materialises the report and projection events from primitive results afterward. ✅
-
-The phase mapping is 1:1 with the default engine:
-
-| Phase | Default (`MatchingService`) | Speed (`SpeedEngine`, engine thread) |
-|-------|-----------------------------|--------------------------------------|
-| 1. Structural validation | `PreTradeValidator.checkStructural` (request thread) | `SpeedMatchingService.checkStructural` in long space (request thread) |
-| Risk gate + load-shed | risk gate + `FillQueue.isOverloaded` (request thread) | same checks; structural + overload on the request thread, the long-native risk gate (`riskCheck`) on the engine thread |
-| 2. Funds reservation | `reserve` + `PreTradeValidator` | `SpeedEngine.reserve` (same worst-case/MARKET-BUY-depth-walk/pure-close rules, fixed-point) |
-| 3. Match | `MatchingEngine.match` | `SpeedEngine.match` (price-time + STP) |
-| 4. Apply fills + P&L + taker fee | `applyFills` | `SpeedEngine.applyFills` (`SpeedPositions` + `SpeedLedger`) |
-| 5. Reconcile (authoritative) | `reconcileGuarded` after lock release | `SpeedEngine.reconcile` per touched account, no lock (single writer, no ABBA) |
-
-The request thread fills the ring slot **inline** (no capturing lambda, so no per-order allocation),
-publishes, and spin-waits on its thread-local `ResultBuffer`; the engine thread writes results into
-that buffer and calls `markDone()` (a release store that unblocks the waiter). The aggressor's
-lifecycle (`fill` / `markPending` / `reject` / `cancel`) is then replayed onto the caller's `Order`,
-and the same `TradeExecuted` / `OrderMatched` / `OrderPlaced` events plus the `PendingFill` are built
-from the primitive results and enqueued to `FillQueue` (or sent to Kafka) exactly as in default mode.
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant C as Caller
-    participant F as SpeedMatchingService (request thread)
-    participant EC as EngineClient
-    participant R as Disruptor ring (EngineSlot)
-    participant E as SpeedEngine thread (single writer)
-    participant Q as FillQueue
-
-    C->>F: submit order
-    F->>F: checkStructural in long space
-    alt malformed
-        F-->>C: ExecutionReport.rejected
-    end
-    Note over F: if FillQueue overloaded, reject OVERLOADED (load shed)
-    F->>F: BigDecimal to fixed-point longs
-    F->>EC: claim ring slot, fill inline, SUBMIT
-    EC->>R: ring.publish seq
-    R->>E: onEvent slot
-    rect rgb(235,245,255)
-    Note over E: engine thread, no locks (owns all state)
-    E->>E: riskCheck: kill-switch / halt / notional / position / exposure
-    E->>E: reserve: worst-case / MARKET-BUY depth walk / pure-close
-    alt risk or funds reject
-        E-->>EC: ResultBuffer.status = REJECTED
-    else accepted
-        E->>E: match: price-time + STP cancel-newest, maker pricing
-        E->>E: applyFills: SpeedPositions + SpeedLedger + taker fee
-        E->>E: reconcile each touched account, authoritative
-        E->>E: rest / free aggressor node by disposition
-    end
-    E->>EC: markDone release store
-    end
-    EC-->>F: ResultBuffer, spin-wait returns
-    F->>F: replay lifecycle onto Order, build Trade and events from raw results
-    F->>Q: enqueue PendingFill [Kafka path]
-    F-->>C: ExecutionReport
-```
-
-A fast path skips the full reconcile when a LIMIT rests with no fills (`recordCleanRest` bumps the
-per-pair pending-margin cache in O(1)); any fill or non-resting disposition reconciles the touched
-pair. See [Architecture, single-writer concurrency](01-architecture.md#speed-engine-single-writer-concurrency)
-for the threading model and [doc 02](02-matching-engine.md#speed-engine-speedbook-matching) for the
-book structure.
 
 ## PositionBook: FIFO netting
 

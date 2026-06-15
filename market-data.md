@@ -1,6 +1,6 @@
 # Market Data Feed
 
-_Last updated: 2026-06-13._
+_Last updated: 2026-06-09._
 
 Two independent price-feed mechanisms feed the same injection point
 (`TradingWebSocketHandler.injectMockQuote`). They can be enabled together or independently. When
@@ -172,10 +172,9 @@ the chart continuous across a restart.
 
 | Key | Env var | Default | Meaning |
 |---|---|---|---|
-| `fxoee.mock-market.enabled` | `MOCK_MARKET_ENABLED` | `false` | Enable `MockMarketMaker`. The constructor `@Value` fallback is `true`, but `application.yml` ships `false`, so it is off unless `MOCK_MARKET_ENABLED=true`. |
-| `fxoee.mock-market.interval-ms` | none | `500` | Tick interval in milliseconds (used as `@Scheduled(fixedRateString=...)`). |
+| `fxoee.mock-market.enabled` | `MOCK_MARKET_ENABLED` | `false` | Enable `MockMarketMaker`. |
+| `fxoee.mock-market.interval-ms` | none | `500` | Tick interval in milliseconds. |
 | `fxoee.mock-market.quantity` | none | `1000000` | Size of house bid/ask LIMIT orders. |
-| `fxoee.mock-market.min-price-ratio` | none | `0.5` | Price floor: a generated mid cannot drop below `basePrice × ratio` (OU crash guard). `0.0` disables the floor. |
 
 ---
 
@@ -253,13 +252,11 @@ WebSocket clients.
 
 ## 5 · Spread & stale-order metrics
 
-A separate poller, `MarketDataBroadcaster` (`fxoee.market-data.enabled=true`, disabled by default),
-runs on a fixed delay of `polling-interval-ms` (default 1000 ms). On each tick it pulls every pair's
-mid from the active `MarketDataService` (only the `orderbook` provider is built in), broadcasts it as
-a `MARKET_DATA` WebSocket message, and then publishes the health metrics below. It is independent of
-the two feeds above: it reads whatever depth is currently resting, regardless of who put it there.
+A separate poller, `MarketDataBroadcaster` (`fxoee.market-data.enabled=true`), watches the book and
+publishes health metrics every `polling-interval-ms` (default 1000 ms). It is independent of the two
+feeds above: it reads whatever depth is currently resting, regardless of who put it there.
 
-Per pair, on each tick it also computes the spread and how far the resting best bid/ask sit from an
+Per pair, on each tick it computes the spread and how far the resting best bid/ask sit from an
 external reference mid, then exposes them as Micrometer gauges:
 
 | Metric | Type | Meaning |
