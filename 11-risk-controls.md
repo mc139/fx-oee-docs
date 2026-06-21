@@ -1,6 +1,6 @@
 # Pre-Trade Risk Controls
 
-_Last updated: 2026-06-09 BST._
+_Last updated: 2026-06-21 BST._
 
 A pre-trade risk gate that runs on every order before it touches the book. It enforces a global
 kill-switch, refuses orders on HALTED pairs, and caps per-order notional, per-account position, and
@@ -9,16 +9,44 @@ per-account gross exposure. All limits are tunable at runtime, no restart needed
 Lives in its own package, [`com.fxoee.risk`](../src/main/java/com/fxoee/risk), deliberately decoupled
 from the matching engine so it could later be lifted into a standalone service.
 
+> **Both engines enforce the same limits.** This doc describes the `default` (lock-based) engine,
+> where the gate is the `RiskService.check` call below. The `speed` engine enforces the identical
+> checks against the same shared [`RiskLimits`](../src/main/java/com/fxoee/risk/RiskLimits.java), but
+> inline on its engine thread in fixed-point longs (`SpeedEngine.setRiskGate`,
+> [SpeedMatchingService.java:133](../src/main/java/com/fxoee/engine/speed/SpeedMatchingService.java)),
+> so the hot path stays zero-alloc. Runtime edits via the REST API / DEBUG panel reach both, because
+> both read the same `RiskLimits` bean.
+
 ## Where it runs
 
 Inside [`MatchingService.submitInternal`](../src/main/java/com/fxoee/engine/MatchingService.java),
-immediately after the structural check and **before the per-pair book lock**:
+immediately after the structural check and **before the per-pair book lock**. The full submit
+pipeline, with the risk gate highlighted:
 
+```mermaid
+flowchart TD
+    A["submit(order)"] --> B{"Structural check<br/>PreTradeValidator"}
+    B -->|reject| RJ["ExecutionReport.rejected<br/>(no engine-state mutation)"]
+    B -->|pass| C{"RISK GATE<br/>kill-switch, halt, notional,<br/>position, exposure"}
+    C -->|reject| RJ
+    C -->|pass| D{"Overload check<br/>(only if async FillQueue wired)"}
+    D -->|backlog at high-water| RJ
+    D -->|pass| E["Acquire per-pair book lock"]
+    E --> F{"Funds reserve<br/>worst-case margin"}
+    F -->|insufficient| RJ
+    F -->|reserved| G["Match against the book"]
+    G --> H["Release book lock<br/>reconcile + publish fills"]
+
+    subgraph lockfree["lock-free, no engine-state mutation on reject"]
+        B
+        C
+        D
+    end
 ```
-structural check  →  RISK GATE  →  (book lock)  →  funds reserve  →  match
-                     ^^^^^^^^^
-                     lock-free, no engine-state mutation on reject
-```
+
+The structural check, risk gate, and overload check all run lock-free and before any book mutation,
+so a rejection at any of those stages touches no engine state. The book lock is taken only once the
+order is admitted, and the funds reservation + match happen inside it.
 
 Running pre-lock matters for two reasons:
 
@@ -65,10 +93,11 @@ The `risk` package imports nothing from `engine`, `matching`, or the persistence
 in-process implementation,
 [`InProcessRiskService`](../src/main/java/com/fxoee/risk/InProcessRiskService.java).
 
-```
-MatchingService ──RiskCheckRequest──▶ RiskService ──RiskDecision──▶ MatchingService
-                                          │
-                                     RiskLimits (runtime-mutable)
+```mermaid
+flowchart LR
+    MS["MatchingService"] -->|"RiskCheckRequest"| RS["RiskService"]
+    RS -->|"RiskDecision"| MS
+    RL["RiskLimits<br/>(runtime-mutable)"] --> RS
 ```
 
 This one-way, DTO-only dependency is what makes the gate extractable: swap `InProcessRiskService`

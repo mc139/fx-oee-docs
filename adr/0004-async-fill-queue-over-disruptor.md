@@ -1,14 +1,19 @@
 # ADR 0004 - Async fill hand-off: interim `ConcurrentLinkedQueue`, LMAX Disruptor planned
 
-_Last updated: 2026-06-09 BST._
+_Last updated: 2026-06-20 BST._
 
-**Status:** Accepted (interim implementation) · **LMAX Disruptor migration planned**
+**Status:** Accepted (interim implementation) · **superseded by [ADR 0005](0005-disruptor-adoption.md)**
 
-> **State of the codebase:** the async hand-off currently runs on a `ConcurrentLinkedQueue`
-> ([`FillQueue`](../../src/main/java/com/fxoee/engine/FillQueue.java)). The LMAX Disruptor
-> (`com.lmax:disruptor:4.0.0`) is **already declared** in [pom.xml](../../pom.xml) and named in the
-> project description as the **planned** hand-off mechanism; it is not yet wired into
-> `src/main/java`. This ADR records both the interim choice and the intended target.
+> **Historical record.** This ADR captured the interim async hand-off (a `ConcurrentLinkedQueue`)
+> and named the LMAX Disruptor (`com.lmax:disruptor:4.0.0`, declared in [pom.xml](../../pom.xml)) as
+> the planned target. The migration has since landed: [ADR 0005](0005-disruptor-adoption.md) adopts
+> the Disruptor for both the speed-engine command ring and (as
+> [`DisruptorFillQueue`](../../src/main/java/com/fxoee/engine/DisruptorFillQueue.java)) the fill
+> hand-off, and supersedes this decision. The `ConcurrentLinkedQueue` variant survives as
+> [`DefaultFillQueue`](../../src/main/java/com/fxoee/engine/DefaultFillQueue.java)
+> (`fxoee.queue.type=clq`); the boot default is now the unbounded
+> [`AgronaFillQueue`](../../src/main/java/com/fxoee/engine/AgronaFillQueue.java). Read this only for
+> the original interim context.
 
 ## Context
 
@@ -64,6 +69,7 @@ hand-off is shown to be hot enough to justify it. The dependency is already on t
 
 ## Follow-up
 
-- Wire the Disruptor ring buffer behind the `FillQueue` interface; keep `PendingFill` as the event
-  type and preserve the batched-drain + re-enqueue contract.
-- Until then, **keep** the `com.lmax:disruptor` dependency. It is intentional, not dead.
+_Done._ The Disruptor ring buffer was wired behind the `FillQueue` interface as
+[`DisruptorFillQueue`](../../src/main/java/com/fxoee/engine/DisruptorFillQueue.java) (event type still
+`FillEvent`/`PendingFill`, batched-drain + re-enqueue contract preserved). See
+[ADR 0005](0005-disruptor-adoption.md) for the decision that closed this out.

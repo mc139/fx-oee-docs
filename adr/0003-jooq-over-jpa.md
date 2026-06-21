@@ -1,6 +1,6 @@
 # ADR 0003 - jOOQ over JPA/Hibernate
 
-_Last updated: 2026-06-09 BST._
+_Last updated: 2026-06-20 BST._
 
 **Status:** Accepted
 
@@ -8,7 +8,7 @@ _Last updated: 2026-06-09 BST._
 
 The persistence layer ([com.fxoee.persistence](../../src/main/java/com/fxoee/persistence)) is a
 **projection writer**, not a domain model. Its job is high-volume, batched writes of engine-computed
-effects: incrementing `customer_account.account_balance` by a stamped delta, inserting/updating/closing
+effects: appending the running cash balance as an `account_transaction` row, inserting/updating/closing
 `position_lot` rows, appending to `trade_events`. The shape is known, the SQL is hot, and the work is
 set-based.
 
@@ -25,8 +25,10 @@ applies the Flyway migrations, then runs `jooq-codegen` to generate typed table/
 `src/generated/jooq`. Repositories write explicit, type-safe SQL through those generated classes
 (`spring-boot-starter-jooq`).
 
-Schema is owned by **Flyway migrations** (`V1..V11`), and jOOQ generates *from the migrated schema*,
-so the generated code and the runtime schema are the same artifact by construction.
+Schema is owned by **Flyway migrations** (`V1..V14`), and jOOQ generates *from the migrated schema*,
+so the generated code and the runtime schema are the same artifact by construction. (One table,
+`wal_projection_offset` in V14, is added after codegen and accessed via plain-SQL jOOQ, so it has no
+generated class.)
 
 ## Consequences
 

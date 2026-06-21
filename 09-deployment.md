@@ -1,6 +1,6 @@
 # 09 - Deployment & operations
 
-_Last updated: 2026-06-09._
+_Last updated: 2026-06-21 BST._
 
 The app ships as a single Docker image (`Dockerfile.backend`): Node build → Maven build → JRE. The
 **frontend is compiled into the backend JAR** (Spring Boot static resources), so there is no separate
@@ -17,25 +17,32 @@ Two deployment targets are supported:
 
 ## Kustomize overlay structure
 
-Environment-specific settings live in `k8s/overlays/`:
+All manifests live under `k8s/base/` (production values); environment-specific patches live in
+`k8s/overlays/`:
 
 ```
 k8s/
-├── kustomization.yaml          ← base (prod values; do not apply directly)
-├── ingress.yaml                ← Traefik, host: fxoee.mcieslik.me
-├── backend/deployment.yaml     ← ghcr.io image, Always pull, imagePullSecrets
-├── …
+├── base/                       ← all resources; prod values; do NOT apply directly
+│   ├── kustomization.yaml      ← lists every manifest below
+│   ├── namespace.yaml
+│   ├── ingress.yaml            ← Traefik, host: fxoee.mcieslik.me
+│   ├── backend/                ← configmap, secret, service, deployment (ghcr.io image)
+│   ├── postgres/               ← secret, service, statefulset, exporter
+│   ├── kafka/                  ← zookeeper, kafka, kafka-ui
+│   ├── questdb/questdb.yaml    ← QuestDB trade-tape sink (Lane 2, ADR 0007 Phase D)
+│   └── observability/          ← prometheus, grafana
 └── overlays/
     ├── local/                  ← Minikube patches
     │   ├── kustomization.yaml
     │   └── patches/
-    │       ├── ingress.yaml    ← ingressClassName: nginx
-    │       └── deployment.json ← localhost image, IfNotPresent, no imagePullSecrets
+    │       ├── ingress.yaml       ← ingressClassName: nginx
+    │       ├── ingress-host.json  ← host: fx-oee.local
+    │       └── deployment.json    ← localhost image, IfNotPresent, no imagePullSecrets
     └── prod/                   ← Hetzner k3s (references base; no patches)
         └── kustomization.yaml
 ```
 
-**Always apply via an overlay**, never from `k8s/` directly:
+**Always apply via an overlay**, never from `k8s/base/` directly:
 
 ```bash
 # local
@@ -44,6 +51,10 @@ kubectl apply -k k8s/overlays/local/
 # prod (CI does this automatically; manual override)
 kubectl apply -k k8s/overlays/prod/
 ```
+
+> **QuestDB is part of the base now**, so any `apply -k` brings it up. It is only *used* when the
+> backend runs the speed engine with the WAL tape enabled (`FXOEE_WAL_QUESTDB_ENABLED=true`, off by
+> default); otherwise it idles. See [Lane 2: speed engine + Aeron WAL + QuestDB](#lane-2-speed-engine--aeron-wal--questdb).
 
 ---
 
@@ -59,6 +70,7 @@ flowchart TB
             kf["kafka-0 (emptyDir)"]
             zk["zookeeper-0 (emptyDir)"]
         end
+        qdb["questdb :9000 ILP / :8812 PG\n(speed-engine WAL tape, opt-in)"]
         subgraph obs["Observability"]
             prom["prometheus :9090"]
             graf["grafana :3000"]
@@ -68,6 +80,7 @@ flowchart TB
     end
     ing --> be & graf & prom
     be --> pg & kf
+    be -.->|ILP, only when WAL tape on| qdb
     kf --> zk
     prom -->|scrape /actuator/prometheus| be
     prom -->|scrape| exp --> pg
@@ -162,7 +175,7 @@ optional. Deploy once with `./scripts/deploy-all.sh` if you want Grafana/Prometh
 (remember `deploy-all` resets the Postgres PVC every run).
 
 **Kafka from the host:** the broker exposes a second **EXTERNAL** listener on port **9093** that
-advertises `localhost:9093` (see `k8s/kafka/kafka.yaml`). `dev-local-backend.sh` port-forwards
+advertises `localhost:9093` (see `k8s/base/kafka/kafka.yaml`). `dev-local-backend.sh` port-forwards
 that port and sets `KAFKA_BOOTSTRAP_SERVERS=localhost:9093`. No `/etc/hosts` entry needed. On
 first run (or after upgrading manifests) the script patches and restarts Kafka if the EXTERNAL
 listener is missing.
@@ -238,7 +251,7 @@ Push to `master` → CI passes → `deploy-hetzner.yml` runs:
 2. **SSH deploy**: connects to Hetzner, runs:
    ```bash
    git pull --ff-only                              # sync manifests
-   kubectl apply -f k8s/namespace.yaml             # ensure namespace
+   kubectl apply -f k8s/base/namespace.yaml        # ensure namespace
    kubectl create secret docker-registry ghcr-secret ...   # registry auth
    kubectl apply -k k8s/overlays/prod/             # all resources (Kustomize)
    kubectl rollout restart deployment/backend      # force new image
@@ -272,7 +285,7 @@ Bootstrap the cluster manually once (CI handles all subsequent deploys):
 
 ```bash
 cd /opt/fx-oee
-kubectl apply -f k8s/namespace.yaml
+kubectl apply -f k8s/base/namespace.yaml
 kubectl apply -k k8s/overlays/prod/
 ```
 
@@ -280,8 +293,9 @@ kubectl apply -k k8s/overlays/prod/
 
 ## Pod resources & probes
 
-[deployment.yaml](../k8s/backend/deployment.yaml) requests `500m` CPU / `1Gi`, limits `2` CPU /
-`1.5Gi`. JVM flags: `-Xms512m -Xmx1200m -XX:+UseG1GC -XX:MaxGCPauseMillis=100`.
+[deployment.yaml](../k8s/base/backend/deployment.yaml) requests `2` CPU / `2Gi`, limits `6` CPU /
+`3Gi` (the speed engine + Aeron WAL want headroom). JVM flags (via `JAVA_TOOL_OPTIONS`): `-Xms1g
+-Xmx2g -XX:+UseG1GC -XX:MaxGCPauseMillis=100`, plus the Agrona `--add-opens` and the JDWP agent.
 
 | Probe | Config |
 |-------|--------|
@@ -331,10 +345,96 @@ port 80, and the backend is also reachable directly on 8080.
 | nginx (app entry) | 80 |
 | backend (app) | 8080 |
 | postgres | 5432 |
-| kafka | 9092 |
+| kafka | 9092 (in-compose), 9093 (host EXTERNAL listener) |
 | postgres-exporter | 9187 |
 | prometheus | 9090 |
 | grafana | 3000 |
+
+> **No QuestDB in compose.** `docker-compose.yml` does **not** ship QuestDB. If you want to exercise
+> the speed-engine WAL tape (Lane 2) against compose, run a QuestDB container yourself
+> (`docker run -p 9000:9000 -p 8812:8812 questdb/questdb:8.3.2`) and point
+> `FXOEE_WAL_QUESTDB_ILP` at it. The k8s base, by contrast, *does* include `questdb/questdb.yaml`.
+
+---
+
+## Lane 2: speed engine + Aeron WAL + QuestDB
+
+The default deployment runs the **lock-based engine + Kafka event-sourcing** (Lane 1). The **speed
+engine** swaps the durability path to an embedded **Aeron Archive WAL**, with two downstream
+projectors (ADR 0007): `WalDbProjector` writes account balances + lots into Postgres, and
+`QuestDbTapeSink` writes the SQL-queryable trade tape into **QuestDB** over ILP. All of it is **off by
+default** and gated behind `fxoee.wal.*` (env-overridable `FXOEE_WAL_*`).
+
+```mermaid
+flowchart LR
+    eng["SpeedEngine\n(in-JVM, authoritative)"]
+    wal[("Aeron Archive WAL\nembedded media driver")]
+    pdb[("Postgres\naccount_transaction + position_lot")]
+    qdb[("QuestDB\ntrades tape, ILP :9000")]
+    ws["WebSocket clients\n(live trade tape)"]
+    eng -->|record fills| wal
+    wal -->|WalDbProjector\nFXOEE_WAL_POSTGRES_ENABLED| pdb
+    wal -->|AeronWalProjector → QuestDbTapeSink\nFXOEE_WAL_QUESTDB_ENABLED| qdb
+    wal -->|AeronWalProjector| ws
+```
+
+The local dev script wires the whole lane for you (see
+[hybrid dev](#hybrid-dev-local-backend--frontend-minikube-infra)):
+
+```bash
+./scripts/dev-local-backend.sh --wal       # speed engine + full Aeron Archive WAL
+./scripts/dev-local-backend.sh --questdb    # + the QuestDB trade-history tape (port-forwards questdb 9000)
+./scripts/dev-local-backend.sh --wal-durable  # persisted Archive + snapshots = DB-off warm restart
+```
+
+`--questdb` port-forwards `svc/questdb 9000:9000`, so deploy QuestDB first with
+`kubectl apply -k k8s/overlays/local/` (it is part of the base). The relevant flags:
+
+| Env var | Default | Meaning |
+|---------|---------|---------|
+| `FXOEE_WAL_AERON_ENABLED` | `false` | Record fills to the embedded Aeron Archive (speed mode only). |
+| `FXOEE_WAL_QUESTDB_ENABLED` | `false` | Also write the trade tape to QuestDB over ILP. |
+| `FXOEE_WAL_QUESTDB_ILP` | `http::addr=localhost:9000;` | QuestDB ILP-over-HTTP endpoint. |
+| `FXOEE_WAL_POSTGRES_ENABLED` | `false` | Run the off-engine Postgres state projector (`WalDbProjector`). |
+| `FXOEE_WAL_PERSIST_ARCHIVE` | `false` | Keep the Archive across boots for durable warm restart (needs a stable archive dir + snapshot). |
+| `FXOEE_WAL_SNAPSHOT_ENABLED` | `false` | Periodic engine snapshots for bounded restart (ADR 0007 Phase E). |
+
+For a **true DB-off durable lane**, combine `persist-archive=true` + `snapshot.enabled=true` +
+`bootstrap.clear-on-start=false` + `recovery.replay-on-startup=false`: the Aeron WAL is then the sole
+source of truth and the engine warm-restarts from snapshot + tail with no database in the loop. The
+full flag list is in [application.yml](../src/main/resources/application.yml) under `fxoee.wal.*`.
+
+---
+
+## ConfigMap (deployed defaults)
+
+The non-secret runtime knobs live in [backend-config](../k8s/base/backend/configmap.yaml) (`envFrom`
+into the backend container; secrets such as `TIINGO_API_KEY` come from `backend-secret`). Both the
+local and prod overlays inherit this base ConfigMap unchanged. The cluster runs **Lane 2** (speed
+engine + Aeron WAL + QuestDB), which is the opposite of the safe local/test defaults in
+[application.yml](../src/main/resources/application.yml). The load-bearing values as deployed:
+
+| Key | Value | Notes |
+|-----|-------|-------|
+| `FXOEE_ENGINE_MODE` | `speed` | selects the zero-alloc long fixed-point engine (`fxoee.engine.mode`; see [speed-engine.md](speed-engine.md)). `default` falls back to the BigDecimal matching core |
+| `KAFKA_ENABLED` | `false` | Kafka producer off: in Lane 2 the embedded Aeron Archive is the durability path, not Kafka |
+| `FXOEE_WAL_AERON_ENABLED` | `true` | engine records fills to the embedded Aeron Archive |
+| `FXOEE_WAL_QUESTDB_ENABLED` | `true` | `AeronWalProjector` writes each fill to QuestDB over ILP (the trade tape) |
+| `FXOEE_WAL_POSTGRES_ENABLED` | `true` | `WalDbProjector` projects balances + lots to Postgres (feeds `/api/debug/state`) |
+| `FXOEE_WAL_QUESTDB_ILP` | `http::addr=questdb:9000;` | ILP target = in-cluster `questdb` service DNS, not localhost |
+| `FXOEE_RECOVERY_REPLAY_ON_STARTUP` | `false` | the WAL is the source of truth, so the stale Kafka-era `trade_events` log is **not** replayed on boot |
+| `CIRCUIT_BREAKER_ENABLED` | `false` | circuit breaker disabled in-cluster |
+| `CIRCUIT_BREAKER_PRICE_DEVIATION_THRESHOLD` | `0.005` | trip threshold (0.5%) when the breaker is enabled |
+| `TIINGO_ENABLED` / `MOCK_MARKET_ENABLED` | `true` / `true` | live Tiingo FX feed and the resting-liquidity mock maker both on |
+| `RISK_MAX_POSITION` / `RISK_MAX_ORDER_NOTIONAL` | `10000000` / `5000000` | pre-trade risk limits |
+
+> **Default vs deployed.** `application.yml` ships the safe local/test values (`default` engine, Kafka
+> on, no WAL); the ConfigMap flips the cluster to the speed + Aeron WAL lane. Recovery stays off here
+> because there is no persisted Archive/snapshot volume yet, so each pod boot is a fresh start (a true
+> DB-off durable lane needs `FXOEE_WAL_PERSIST_ARCHIVE=true` + snapshots, see
+> [Lane 2](#lane-2-speed-engine--aeron-wal--questdb)). The wiring is
+> `@ConditionalOnProperty(fxoee.engine.mode, havingValue=speed)` in `SpeedEngineConfig` (and the
+> matching `havingValue=default, matchIfMissing=true` guards in `EngineConfig` / `MatchingConfig`).
 
 ---
 

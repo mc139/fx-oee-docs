@@ -1,6 +1,6 @@
 # Market Data Feed
 
-_Last updated: 2026-06-09._
+_Last updated: 2026-06-21 BST._
 
 Two independent price-feed mechanisms feed the same injection point
 (`TradingWebSocketHandler.injectMockQuote`). They can be enabled together or independently. When
@@ -98,11 +98,11 @@ their own, rather than toggling `MOCK_MARKET_ENABLED` by hand around the weekend
 | `fxoee.tiingo.enabled` | `TIINGO_ENABLED` | `false` | Activate REST history + WebSocket feed. |
 | `fxoee.tiingo.api-key` | `TIINGO_API_KEY` | _(required)_ | Tiingo API token; goes in `backend-secret`. |
 | `fxoee.tiingo.history-days` | `TIINGO_HISTORY_DAYS` | `7` | Days of OHLC history loaded per timeframe on startup. |
-| `fxoee.tiingo.threshold-level` | `TIINGO_THRESHOLD_LEVEL` | `5` | WebSocket throttle (ms between price updates). |
+| `fxoee.tiingo.threshold-level` | `TIINGO_THRESHOLD_LEVEL` | `5` | Tiingo `thresholdLevel` subscription field (not ms): lower = more frequent ticks, higher = quieter. |
 | `fxoee.tiingo.quantity` | `TIINGO_QUANTITY` | `1000000` | Size of each LIMIT order injected per quote. |
 
-> **Secret hygiene:** `TIINGO_API_KEY` must be placed in `k8s/backend/secret.yaml`, which is
-> listed in `.gitignore` and never committed.
+> **Secret hygiene:** `TIINGO_API_KEY` must be placed in `k8s/base/backend/secret.yaml`, which is
+> listed in `.gitignore` and never committed (copy `secret.example.yaml` as a starting point).
 
 ---
 
@@ -172,9 +172,10 @@ the chart continuous across a restart.
 
 | Key | Env var | Default | Meaning |
 |---|---|---|---|
-| `fxoee.mock-market.enabled` | `MOCK_MARKET_ENABLED` | `false` | Enable `MockMarketMaker`. |
-| `fxoee.mock-market.interval-ms` | none | `500` | Tick interval in milliseconds. |
+| `fxoee.mock-market.enabled` | `MOCK_MARKET_ENABLED` | `false` | Enable `MockMarketMaker`. The constructor `@Value` fallback is `true`, but `application.yml` ships `false`, so it is off unless `MOCK_MARKET_ENABLED=true`. |
+| `fxoee.mock-market.interval-ms` | none | `500` | Tick interval in milliseconds (used as `@Scheduled(fixedRateString=...)`). |
 | `fxoee.mock-market.quantity` | none | `1000000` | Size of house bid/ask LIMIT orders. |
+| `fxoee.mock-market.min-price-ratio` | none | `0.5` | Price floor: a generated mid cannot drop below `basePrice x ratio` (OU crash guard). `0.0` disables the floor. |
 
 ---
 
@@ -252,11 +253,14 @@ WebSocket clients.
 
 ## 5 · Spread & stale-order metrics
 
-A separate poller, `MarketDataBroadcaster` (`fxoee.market-data.enabled=true`), watches the book and
-publishes health metrics every `polling-interval-ms` (default 1000 ms). It is independent of the two
-feeds above: it reads whatever depth is currently resting, regardless of who put it there.
+A separate poller, `MarketDataBroadcaster` (`fxoee.market-data.enabled=true`, disabled by default),
+runs on a fixed delay of `polling-interval-ms` (default 1000 ms). On each tick it pulls every pair's
+mid from the active `MarketDataService` (the default `orderbook` provider, selectable via
+`fxoee.market-data.provider`), broadcasts it as a `MARKET_DATA` WebSocket message, and then publishes
+the health metrics below. It is independent of the two feeds above: it reads whatever depth is
+currently resting, regardless of who put it there.
 
-Per pair, on each tick it computes the spread and how far the resting best bid/ask sit from an
+Per pair, on each tick it also computes the spread and how far the resting best bid/ask sit from an
 external reference mid, then exposes them as Micrometer gauges:
 
 | Metric | Type | Meaning |
