@@ -1,6 +1,6 @@
 # 10 - Configuration reference
 
-_Last updated: 2026-06-21 BST._
+_Last updated: 2026-06-27 BST._
 
 Every runtime knob is resolved by [application.yml](../src/main/resources/application.yml) or
 [performance.properties](../src/main/resources/performance.properties) (imported `optional:` by
@@ -169,6 +169,7 @@ For a **true DB-off durable lane**: `persist-archive=true`, `snapshot.enabled=tr
 |-----|---------|---------|--------|
 | `fxoee.wal.questdb.enabled` | `FXOEE_WAL_QUESTDB_ENABLED` | `false` | ✅ projector also writes each trade to QuestDB over ILP for SQL history/analytics. Needs a running QuestDB ([k8s/base/questdb/questdb.yaml](../k8s/base/questdb/questdb.yaml) or docker); connects lazily so boot order doesn't matter |
 | `fxoee.wal.questdb.ilp` | `FXOEE_WAL_QUESTDB_ILP` | `http::addr=localhost:9000;` | ✅ QuestDB ILP client connection string |
+| `fxoee.wal.questdb.ttl` | `FXOEE_WAL_QUESTDB_TTL` | `30d` | ✅ retention window for the `trades` tape (QuestDB duration, e.g. `30d`, `12h`, `4w`). QuestDB drops whole partitions older than this on its own (`PARTITION BY DAY`), so the tape stays bounded. Postgres + the Aeron WAL remain the durable source of truth. Set blank or `0` to keep everything (unbounded) |
 
 ### Postgres account-state projector (`fxoee.wal.postgres.*`, Phase B)
 

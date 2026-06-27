@@ -1,6 +1,6 @@
 # 05 - Event sourcing & persistence
 
-_Last updated: 2026-06-21 BST._
+_Last updated: 2026-06-27 BST._
 
 The engine is authoritative and in-memory. Durability and the read-model are projections of an
 **append-only log**. There are **two durability lanes**, picked by `fxoee.engine.mode`, and they use
@@ -347,6 +347,10 @@ downstream replica, not on the hot path. Key properties:
 path. It connects **lazily** on first flush (the app boots before QuestDB is reachable) and creates the
 `trades` table with `DEDUP UPSERT KEYS(timestamp, trade_id)` so re-projecting a (deterministic-id) fill is
 an upsert, not a dup. DDL/TRUNCATE go over HTTP `/exec`; the ILP `Sender` is append-only and single-thread.
+The `trades` table carries a retention window (`fxoee.wal.questdb.ttl`, default `30d`): QuestDB drops whole
+day partitions older than the window on its own, so the tape stays bounded while Postgres and the Aeron WAL
+remain the durable source of truth. The TTL ships in the `CREATE TABLE` for a fresh tape and via a follow-up
+`ALTER TABLE trades SET TTL` for one that already exists; set the value blank or `0` to keep everything.
 
 ### Ingress shed (plan "Fix B")
 

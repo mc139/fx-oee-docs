@@ -1,6 +1,6 @@
 # 09 - Deployment & operations
 
-_Last updated: 2026-06-21 BST._
+_Last updated: 2026-06-27 BST._
 
 The app ships as a single Docker image (`Dockerfile.backend`): Node build → Maven build → JRE. The
 **frontend is compiled into the backend JAR** (Spring Boot static resources), so there is no separate
@@ -395,6 +395,7 @@ The local dev script wires the whole lane for you (see
 | `FXOEE_WAL_AERON_ENABLED` | `false` | Record fills to the embedded Aeron Archive (speed mode only). |
 | `FXOEE_WAL_QUESTDB_ENABLED` | `false` | Also write the trade tape to QuestDB over ILP. |
 | `FXOEE_WAL_QUESTDB_ILP` | `http::addr=localhost:9000;` | QuestDB ILP-over-HTTP endpoint. |
+| `FXOEE_WAL_QUESTDB_TTL` | `30d` | Retention window for the QuestDB `trades` tape; QuestDB drops partitions older than this. Blank or `0` keeps everything. |
 | `FXOEE_WAL_POSTGRES_ENABLED` | `false` | Run the off-engine Postgres state projector (`WalDbProjector`). |
 | `FXOEE_WAL_PERSIST_ARCHIVE` | `false` | Keep the Archive across boots for durable warm restart (needs a stable archive dir + snapshot). |
 | `FXOEE_WAL_SNAPSHOT_ENABLED` | `false` | Periodic engine snapshots for bounded restart (ADR 0007 Phase E). |
@@ -422,6 +423,7 @@ engine + Aeron WAL + QuestDB), which is the opposite of the safe local/test defa
 | `FXOEE_WAL_QUESTDB_ENABLED` | `true` | `AeronWalProjector` writes each fill to QuestDB over ILP (the trade tape) |
 | `FXOEE_WAL_POSTGRES_ENABLED` | `true` | `WalDbProjector` projects balances + lots to Postgres (feeds `/api/debug/state`) |
 | `FXOEE_WAL_QUESTDB_ILP` | `http::addr=questdb:9000;` | ILP target = in-cluster `questdb` service DNS, not localhost |
+| `FXOEE_WAL_QUESTDB_TTL` | `30d` | retention window for the QuestDB `trades` tape; older partitions are dropped so the tape stays bounded (Postgres + Aeron WAL stay the durable source of truth) |
 | `FXOEE_RECOVERY_REPLAY_ON_STARTUP` | `false` | the WAL is the source of truth, so the stale Kafka-era `trade_events` log is **not** replayed on boot |
 | `CIRCUIT_BREAKER_ENABLED` | `false` | circuit breaker disabled in-cluster |
 | `CIRCUIT_BREAKER_PRICE_DEVIATION_THRESHOLD` | `0.005` | trip threshold (0.5%) when the breaker is enabled |
