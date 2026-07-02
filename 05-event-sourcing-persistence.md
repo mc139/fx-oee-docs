@@ -430,13 +430,13 @@ fresh start: wipe transactional state, reset every account to the 10 M seed. Whe
 
 | Environment | Setting | Effect |
 |-------------|---------|--------|
-| **k8s** ([configmap.yaml](../k8s/base/backend/configmap.yaml)) | `FXOEE_RECOVERY_REPLAY_ON_STARTUP: "true"` | every pod restart (crash, rolling update, OOM kill) preserves open positions + trade history |
-| **docker-compose** (`environment:`) | `FXOEE_RECOVERY_REPLAY_ON_STARTUP=true` | same, for a long-lived compose stack |
+| **k8s** ([configmap.yaml](../k8s/base/backend/configmap.yaml)) | `FXOEE_RECOVERY_REPLAY_ON_STARTUP: "false"` | off by default; each pod restart resets to a fresh 10 M seed rather than replaying `trade_events` |
+| **docker-compose** (`environment:`) | _unset, so `false`_ | same, for a long-lived compose stack |
 | **local dev** (default) | _unset, so `false`_ | fresh start on every `mvn spring-boot:run` / `deploy-all.sh` (which also wipes the Postgres PVC, so there would be nothing to replay anyway) |
 
-Why it is safe to default-on for k8s: replay is **idempotent**. The relay's re-publish is de-duplicated
-downstream by `FillConsumer` on the `fill_dedup` table, and an empty log makes warm restart a graceful
-no-op. So a first-ever deploy onto an empty database behaves exactly like a fresh start.
+Replay is **idempotent** if enabled: the relay's re-publish is de-duplicated downstream by
+`FillConsumer` on the `fill_dedup` table, and an empty log makes warm restart a graceful no-op. So
+turning this on for a first-ever deploy onto an empty database behaves exactly like a fresh start.
 
 Operational verification on a live cluster (minikube / k3s): see the runbook
 [testing-event-sourcing-minikube.md](testing-event-sourcing-minikube.md).

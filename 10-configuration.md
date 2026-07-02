@@ -70,7 +70,7 @@ selected by `fxoee.queue.type`; `performance.properties` actually leaves `queue.
 | `fxoee.queue.type` | `FXOEE_QUEUE_TYPE` | `agrona` (key not in base yml; `matchIfMissing`) | ✅ `FillQueue` impl between the engine and `PersistenceWorker`: `agrona` (unbounded Agrona MPSC, never rejects), `clq` (`ConcurrentLinkedQueue`, sheds at high-water), or `disruptor` ring (`DisruptorFillQueue`) |
 | `fxoee.funding.mode` | none | `FULL_NOTIONAL` | ✅ `MARGIN` (leveraged) vs `FULL_NOTIONAL` ([doc 04](04-funding-pnl-conservation.md)) |
 | `fxoee.engine.authoritative` | none | `true` | ✅ WebSocket + debug APIs read in-JVM `MatchingService` state |
-| `fxoee.recovery.replay-on-startup` | `FXOEE_RECOVERY_REPLAY_ON_STARTUP` | `false` | ✅ when true, `AccountBootstrapper` rebuilds the engine from `trade_events` (warm restart) instead of wiping to a fresh 10M balance. Always `true` in k8s ([configmap](../k8s/base/backend/configmap.yaml)); `false` in local dev, where `deploy-all.sh` wipes the Postgres PVC each run anyway so an empty log makes warm restart a no-op. See [doc 05](05-event-sourcing-persistence.md#warm-restart-recovery-engine-replay). |
+| `fxoee.recovery.replay-on-startup` | `FXOEE_RECOVERY_REPLAY_ON_STARTUP` | `false` | ✅ when true, `AccountBootstrapper` rebuilds the engine from `trade_events` (warm restart) instead of wiping to a fresh 10M balance. `false` in k8s ([configmap](../k8s/base/backend/configmap.yaml)) and in local dev, where `deploy-all.sh` wipes the Postgres PVC each run anyway so an empty log makes warm restart a no-op. See [doc 05](05-event-sourcing-persistence.md#warm-restart-recovery-engine-replay). |
 | `fxoee.recovery.snapshots.enabled` | `FXOEE_RECOVERY_SNAPSHOTS_ENABLED` | `false` | ✅ Phase 4 bounded warm restart (Kafka path): `EngineSnapshotter` publishes per-account state to the log-compacted `engine.snapshots` topic and replay loads the latest snapshot per account, then replays only the `trade_events` tail. Requires `kafka.enabled=true`; opportunistic, off by default ([ADR 0006](adr/0006-engine-snapshots-bounded-restart.md)) |
 | `fxoee.recovery.snapshots.interval-ms` | `FXOEE_RECOVERY_SNAPSHOTS_INTERVAL_MS` | `30000` | ✅ how often the snapshotter attempts a consistent-cut capture |
 | `fxoee.mock-market.enabled` | `MOCK_MARKET_ENABLED` | `false` | ✅ `MockMarketMaker` injects house bid/ask depth every 500 ms using an OU+GARCH price model |
@@ -267,12 +267,11 @@ full gate; the circuit breaker is in [circuit-breaker.md](circuit-breaker.md).
 | `fx.risk.max-order-notional` | `RISK_MAX_ORDER_NOTIONAL` | `5000000` | ✅ enforced; per-order USD notional cap (0 disables) |
 | `fx.risk.max-gross-exposure` | `RISK_MAX_GROSS_EXPOSURE` | `0` | ✅ enforced; per-account gross margin USD (0 = disabled) |
 | `fx.circuit-breaker.enabled` | `CIRCUIT_BREAKER_ENABLED` | `true` (yml + code `@Value`); **`performance.properties` and the k8s configmap set `false`** | ✅ master on/off for the circuit breaker; when false no pair is ever auto-halted (advisory-only in speed mode, so the max-throughput profile turns it off) |
-| `fx.circuit-breaker.price-deviation-threshold` | `CIRCUIT_BREAKER_PRICE_DEVIATION_THRESHOLD` | `0.5` locally (yml); code `@Value` fallback `0.005`; k8s configmap sets `0.005` | ✅ enforced; halts a pair on a price jump beyond this, and the risk gate then refuses orders on HALTED pairs |
+| `fx.circuit-breaker.price-deviation-threshold` | `CIRCUIT_BREAKER_PRICE_DEVIATION_THRESHOLD` | `0.005` (yml); code `@Value` fallback `0.005`; k8s configmap sets `0.005` | ✅ enforced; halts a pair on a price jump beyond this, and the risk gate then refuses orders on HALTED pairs |
 
-Watch out for the circuit-breaker default: it differs per environment. `application.yml` ships `0.5`
-(a 50% jump, deliberately loose so synthetic mock-market volatility doesn't trip halts in local dev),
-the k8s configmap tightens it to `0.005` (0.5%), and the `@Value` fallback in `CircuitBreaker.java`
-(used only when the yml key is removed entirely) is `0.005`.
+The circuit-breaker default is consistent across environments: `application.yml` ships `0.005`
+(0.5%), the k8s configmap also sets `0.005`, and the `@Value` fallback in `CircuitBreaker.java`
+(used only when the yml key is removed entirely) is `0.005` too.
 
 All `fx.risk.*` values are **runtime-mutable** via `PUT /api/risk/limits` / the DEBUG panel RISK tab.
 The `application.yml` values are only the startup seed.

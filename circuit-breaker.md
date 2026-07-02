@@ -47,13 +47,13 @@ halted pair (see [Known limitations](#known-limitations)).
 | Key | Env var | Default | Meaning |
 | --- | --- | --- | --- |
 | `fx.circuit-breaker.enabled` | `CIRCUIT_BREAKER_ENABLED` | `true` locally; `false` in k8s | Master switch. When `false`, `onTrade` returns immediately and no pair is ever halted by the breaker. |
-| `fx.circuit-breaker.price-deviation-threshold` | `CIRCUIT_BREAKER_PRICE_DEVIATION_THRESHOLD` | `0.5` locally; `0.005` in k8s | Max allowed relative jump between consecutive trades. |
+| `fx.circuit-breaker.price-deviation-threshold` | `CIRCUIT_BREAKER_PRICE_DEVIATION_THRESHOLD` | `0.005` locally; `0.005` in k8s | Max allowed relative jump between consecutive trades. |
 
-Both defaults depend on where you run it. `application.yml:240-241` ships `enabled=true` and threshold
-`0.5` (50%, deliberately loose so mock-market volatility doesn't constantly halt pairs in local dev).
-The k8s [configmap](../k8s/base/backend/configmap.yaml) ships `CIRCUIT_BREAKER_ENABLED=false` and
-threshold `0.005` (0.5%), so the breaker is currently switched **off** in the k8s deploy (the lower
-threshold is what would apply if it were re-enabled there). The constructor `@Value` fallbacks
+The threshold default is consistent across environments. `application.yml:240-241` ships `enabled=true`
+and threshold `0.005` (0.5%). The k8s [configmap](../k8s/base/backend/configmap.yaml) ships
+`CIRCUIT_BREAKER_ENABLED=false` and threshold `0.005` (0.5%), so the breaker is currently switched
+**off** in the k8s deploy (the same threshold is what would apply if it were re-enabled there). The
+constructor `@Value` fallbacks
 ([CircuitBreaker.java:48](../src/main/java/com/fxoee/service/CircuitBreaker.java)) are `enabled=true`
 and threshold `0.005`; they only apply if the yml keys are removed entirely. On startup the breaker
 logs `CircuitBreaker armed` (or `DISABLED`) with the active threshold.

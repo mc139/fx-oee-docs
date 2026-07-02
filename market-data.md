@@ -185,7 +185,8 @@ When `MockMarketMaker` is active, its parameters can be changed live without a r
 
 ### REST API
 
-All endpoints are unauthenticated (debug-only, same policy as `/api/debug/*`).
+All endpoints require an authenticated ADMIN token (`MockMarketController` sits under the
+`/api/debug/**` ADMIN security tier, plus the `fxoee.debug.enabled` master switch).
 
 #### `GET /api/debug/mock-market/status`
 
