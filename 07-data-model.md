@@ -119,6 +119,8 @@ carried on `TradeExecuted` and applied verbatim by `FillConsumer`:
 | V12 | `fill_dedup` (durable per-`(trade_id, leg)` dedup for the account-keyed fill projection) |
 | V13 | `account_transaction.seq BIGSERIAL` + `(account_id, seq DESC)` index (append-only cash projection) |
 | V14 | `wal_projection_offset` (single-row durable cursor for the Lane-2 `WalDbProjector`) |
+| V15 | widen `position_lot.quantity` to `NUMERIC(19,8)` (lot precision; matches order/engine quantity) |
+| V16 | `users.role` (RBAC: `USER` / `ADMIN`, stamped into the JWT and enforced by `SecurityConfig`) |
 
 ```mermaid
 erDiagram

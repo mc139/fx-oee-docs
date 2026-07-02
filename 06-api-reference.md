@@ -36,18 +36,21 @@ flowchart LR
 
 | Method | Path | Body / params | Returns |
 |--------|------|---------------|---------|
-| POST | `/accounts/{id}/deposit` | `amount` (request param) | `AccountView` (cash, reserved, free, positions) |
-| POST | `/orders` | `SubmitOrderRequest` | `ExecutionReport` |
-| GET | `/accounts/{id}` | none | `AccountView` |
+| POST | `/accounts/{id}/deposit` | `amount` (request param); needs `Authorization` header, ADMIN role | `AccountView` (cash, reserved, free, positions) |
+| POST | `/orders` | `SubmitOrderRequest`; needs `Authorization` header | `ExecutionReport` |
+| GET | `/accounts/{id}` | none; needs `Authorization` header | `AccountView` |
 
 Heads up on `/deposit`: it calls `ledger.seed(id, amount)`, which **sets** cash to that amount
-(and zeroes reserved + realized P&L). It's a seeding tool, not an additive deposit.
+(and zeroes reserved + realized P&L). It's a seeding tool, not an additive deposit; it is also
+ADMIN-only at the security layer.
 
-`SubmitOrderRequest = { accountId, pair, side, type, price, quantity }` (a record on
-`EngineOrderController`). It has **no** `clientOrderId` field; that lives only on the generic
-`/api/orders` body below. The controller builds an `Order` and calls `MatchingService.submit`; the
-`ExecutionReport` carries status, fills, remaining qty, reject reason, and taker fee. This surface is
-unauthenticated: the account is taken from the request body, not a JWT.
+`SubmitOrderRequest = { pair, side, type, price, quantity }` (a record on `EngineOrderController`).
+It has **no** `accountId` field and **no** `clientOrderId` field; the account is always the
+authenticated principal (`@AuthenticationPrincipal UUID accountId`), never a client-supplied value.
+`clientOrderId` lives only on the generic `/api/orders` body below. The controller builds an `Order`
+and calls `MatchingService.submit`; the `ExecutionReport` carries status, fills, remaining qty, reject
+reason, and taker fee. This surface requires an authenticated USER token; the order owner is always
+the token principal, never a body field.
 
 ### Generic: [OrderController](../src/main/java/com/fxoee/api/controller/rest/OrderController.java) (`/api`)
 
