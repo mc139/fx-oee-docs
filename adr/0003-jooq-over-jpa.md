@@ -6,7 +6,7 @@ _Last updated: 2026-06-20 BST._
 
 ## Context
 
-The persistence layer ([com.fxoee.persistence](../../src/main/java/com/fxoee/persistence)) is a
+The persistence layer (`com.fxoee.persistence`) is a
 **projection writer**, not a domain model. Its job is high-volume, batched writes of engine-computed
 effects: appending the running cash balance as an `account_transaction` row, inserting/updating/closing
 `position_lot` rows, appending to `trade_events`. The shape is known, the SQL is hot, and the work is
@@ -20,7 +20,7 @@ SQL is hard to predict, and there is no compile-time guarantee the queries match
 ## Decision
 
 Use **jOOQ** with **code generation from the migrated schema**. The build
-([pom.xml](../../pom.xml)) spins up a throwaway PostgreSQL (Testcontainers/Docker on port 5433),
+(`pom.xml`) spins up a throwaway PostgreSQL (Testcontainers/Docker on port 5433),
 applies the Flyway migrations, then runs `jooq-codegen` to generate typed table/record classes into
 `src/generated/jooq`. Repositories write explicit, type-safe SQL through those generated classes
 (`spring-boot-starter-jooq`).

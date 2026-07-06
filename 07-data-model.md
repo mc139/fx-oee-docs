@@ -17,7 +17,7 @@ Two projection lanes feed that PostgreSQL schema, depending on `fxoee.engine.mod
 Both lanes write the **same tables** with the **same idempotency primitives**, so the schema below
 serves both. Both are off by default (Lane 2 enables behind `fxoee.wal.*` / the `--wal` dev flag).
 
-## In-memory domain ([com.fxoee.domain](../src/main/java/com/fxoee/domain))
+## In-memory domain (`com.fxoee.domain`)
 
 ```mermaid
 classDiagram
@@ -85,14 +85,14 @@ are exempt from funds tracking, fees, and self-trade prevention).
 
 | Enum | Values |
 |------|--------|
-| [CurrencyPair](../src/main/java/com/fxoee/domain/enums/CurrencyPair.java) | EUR_USD, GBP_USD, USD_JPY, USD_CHF, AUD_USD, USD_CAD, NZD_USD; each carries `marginRate`, `tickSize`, `minLotSize`, `isUsdBase()` |
-| [OrderSide](../src/main/java/com/fxoee/domain/enums/OrderSide.java) | BUY, SELL |
-| [OrderType](../src/main/java/com/fxoee/domain/enums/OrderType.java) | LIMIT, MARKET |
-| [OrderStatus](../src/main/java/com/fxoee/domain/enums/OrderStatus.java) | NEW, PENDING, PARTIALLY_FILLED, FILLED, CANCELLED, REJECTED |
+| `CurrencyPair` | EUR_USD, GBP_USD, USD_JPY, USD_CHF, AUD_USD, USD_CAD, NZD_USD; each carries `marginRate`, `tickSize`, `minLotSize`, `isUsdBase()` |
+| `OrderSide` | BUY, SELL |
+| `OrderType` | LIMIT, MARKET |
+| `OrderStatus` | NEW, PENDING, PARTIALLY_FILLED, FILLED, CANCELLED, REJECTED |
 
 ### LotEvent (sealed)
 
-[LotEvent](../src/main/java/com/fxoee/domain/model/LotEvent.java) is the unit of position change
+`LotEvent` is the unit of position change
 carried on `TradeExecuted` and applied verbatim by `FillConsumer`:
 
 - `Open(PositionLot lot)`: a new lot added.
@@ -101,7 +101,7 @@ carried on `TradeExecuted` and applied verbatim by `FillConsumer`:
 
 ## Database schema (Flyway migrations)
 
-[src/main/resources/db/migration](../src/main/resources/db/migration):
+`src/main/resources/db/migration`:
 
 | Migration | Creates |
 |-----------|---------|
@@ -214,7 +214,7 @@ Notes on the projection-idempotency tables (V12-V14):
   RETURNING`) **inside the same transaction** as the projection write, so a Kafka redelivery or the
   warm-restart relay re-publishing the unconfirmed `trade_events` tail (Lane 1), or a re-replayed
   Archive batch (Lane 2), is a no-op. It replaced `FillConsumer`'s in-memory LRU dedup (see
-  `FillBatchRepository.flushLegs`, [persistence/FillBatchRepository.java](../src/main/java/com/fxoee/persistence/FillBatchRepository.java)).
+  `FillBatchRepository.flushLegs`, `persistence/FillBatchRepository.java`).
 - `account_transaction.seq` (V13) makes the cash projection **append-only**: `customer_account
   .account_balance` is frozen at the initial deposit, and the running cash balance is the latest
   `account_transaction.balance_after` for the account (ordered by `seq DESC`, since a batched INSERT
@@ -226,7 +226,7 @@ Notes on the projection-idempotency tables (V12-V14):
   The projector advances this row only **after** a batch commits, so a crash re-replays at most one
   batch and `fill_dedup` absorbs the overlap.
 
-Access is via **jOOQ** repositories ([com.fxoee.persistence](../src/main/java/com/fxoee/persistence)):
+Access is via **jOOQ** repositories (`com.fxoee.persistence`):
 `CustomerAccountRepository`, `PositionLotRepository`, `FillBatchRepository` (batched fill writes +
 `flushLegs` account-keyed projection + `fill_dedup`), `TradeEventRepository` (append-only log),
 `RestingOrderRepository` (live-book mirror), `OrderRepository` (audit trail), and
@@ -245,5 +245,5 @@ in V14 **after** jOOQ codegen and so has no generated class).
 The DB row keys (lot ids) are the **engine-assigned** ids carried on `LotEvent`, so the projection
 indexes positions identically to the engine. That's what keeps them in lockstep. Lane 2 reaches the
 same tables by a different route: instead of consuming Kafka it decodes the Aeron Archive fill records
-([wal/WalDbProjector.java](../src/main/java/com/fxoee/wal/WalDbProjector.java)) and shares the same
+(`wal/WalDbProjector.java`) and shares the same
 `flushLegs` writer, so its idempotency and lot indexing are identical to Lane 1.

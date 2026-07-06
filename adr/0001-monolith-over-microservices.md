@@ -18,7 +18,7 @@ without either replicating it or serializing every access over the wire.
 
 ## Decision
 
-Run everything in **one Spring Boot process** ([FxOeeApplication](../../src/main/java/com/fxoee/FxOeeApplication.java)):
+Run everything in **one Spring Boot process** (`FxOeeApplication`):
 matching core, REST + WebSocket API, the async projection pipeline, the market simulator, and the
 mock market maker. Use **internal module boundaries** (Java packages with a deliberately pure
 `com.fxoee.engine` core that touches Spring only in `EngineConfig`) instead of network boundaries.

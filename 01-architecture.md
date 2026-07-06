@@ -4,7 +4,7 @@ _Last updated: 2026-06-21 BST._
 
 ## Process layout
 
-`fx-oee` is a **single Spring Boot process** ([FxOeeApplication.java](../src/main/java/com/fxoee/FxOeeApplication.java))
+`fx-oee` is a **single Spring Boot process** (`FxOeeApplication.java`)
 that embeds:
 
 - a **matching core** (`com.fxoee.engine`, `com.fxoee.matching`): pure Java, no framework
@@ -27,8 +27,8 @@ durability lane; the API, WebSocket snapshots, risk gate, and circuit breaker ar
 
 | Mode | Core | Wiring | Durability |
 |------|------|--------|------------|
-| `default` | lock-based `MatchingService`, `BigDecimal`, `OrderBook`×7, per-pair `MatchingEngine` locks | [EngineConfig.java:72](../src/main/java/com/fxoee/engine/EngineConfig.java) (`matchIfMissing=true`) | Lane 1: Kafka → Postgres |
-| `speed` | single-writer LMAX Disruptor ring, fixed-point **longs**, zero-alloc hot path, optional core pinning | [SpeedEngineConfig.java:46](../src/main/java/com/fxoee/engine/speed/SpeedEngineConfig.java) (`havingValue="speed"`) | Lane 2: Aeron Archive WAL |
+| `default` | lock-based `MatchingService`, `BigDecimal`, `OrderBook`×7, per-pair `MatchingEngine` locks | `EngineConfig.java:72` (`matchIfMissing=true`) | Lane 1: Kafka → Postgres |
+| `speed` | single-writer LMAX Disruptor ring, fixed-point **longs**, zero-alloc hot path, optional core pinning | `SpeedEngineConfig.java:46` (`havingValue="speed"`) | Lane 2: Aeron Archive WAL |
 
 `performance.properties:31` and `application-local.yml` set `speed`; otherwise the lock engine runs.
 The two cores were once `speed` / `speed2`; that was consolidated, so there is one speed engine and
@@ -64,19 +64,19 @@ flowchart LR
 
 Two `@Configuration` classes wire the core:
 
-- [MatchingConfig.java](../src/main/java/com/fxoee/config/MatchingConfig.java) builds one
+- `MatchingConfig.java` builds one
   `OrderBook` and one `MatchingEngine` **per currency pair**, exposed as
   `Map<CurrencyPair, OrderBook>` and `Map<CurrencyPair, MatchingEngine>` (`EnumMap`).
-- [EngineConfig.java](../src/main/java/com/fxoee/engine/EngineConfig.java) is the *only* class in
+- `EngineConfig.java` is the *only* class in
   `com.fxoee.engine` that touches Spring. It builds the `Margin`, `PositionBook`, `MarginLedger`,
   `PreTradeValidator`, `MarketBuyEstimator`, and the `MatchingService` facade. The Kafka producer and
   `FillQueue` are injected via `ObjectProvider`, so the engine works identically whether or not Kafka
   is present.
 
 The `MarginLedger` bean **pre-seeds the house account** (`HouseAccount.HOUSE_UUID`) with $10M
-([EngineConfig.java:52](../src/main/java/com/fxoee/engine/EngineConfig.java)) so reconcile never flags
+(`EngineConfig.java:52`) so reconcile never flags
 mock-maker orders as unfunded before the first user trade. The speed engine
-mirrors this in [SpeedEngineConfig.java:154](../src/main/java/com/fxoee/engine/speed/SpeedEngineConfig.java)
+mirrors this in `SpeedEngineConfig.java:154`
 (`service.seedHouse(...)`).
 
 ## Durability lanes
@@ -87,7 +87,7 @@ effects. Which lane runs follows the engine mode.
 ### Lane 1: Kafka → Postgres (default engine)
 
 `FillQueue` → single-threaded `PersistenceWorker` → **append `TradeExecuted` to `trade_events` first,
-then publish to Kafka** ([PersistenceWorker.java:30](../src/main/java/com/fxoee/engine/PersistenceWorker.java)),
+then publish to Kafka** (`PersistenceWorker.java:30`),
 mark-published on the broker ack callback. `FillConsumer` / `SnapshotConsumer` write PostgreSQL and
 the in-memory `AccountState` mirror. The Kafka producer is on by default; the consumer side is gated
 by `KAFKA_ENABLED` (default `false`). Warm restart rebuilds the engine from `trade_events` when
@@ -96,29 +96,29 @@ by `KAFKA_ENABLED` (default `false`). Warm restart rebuilds the engine from `tra
 ### Lane 2: Aeron Archive WAL (speed engine, ADR 0007)
 
 JVM-only, **no Kafka**. The speed engine records each fill to an embedded **Aeron Archive** WAL
-([AeronWal.java](../src/main/java/com/fxoee/wal/AeronWal.java)) from its own thread; the recording is
+(`AeronWal.java`) from its own thread; the recording is
 position-addressable, one writer and many independent readers. Three pollers project from it:
 
 | Poller | Reads to | Source |
 |--------|----------|--------|
-| `AeronWalProjector` | trade tape: `TradeStore` + WS `TradeEvent` | [AeronWalProjector.java:41](../src/main/java/com/fxoee/wal/AeronWalProjector.java) |
-| `WalDbProjector` (Phase B) | Postgres balances + position lots; periodic catch-up, idempotent via `fill_dedup`, incremental cursor | [WalDbProjector.java:33](../src/main/java/com/fxoee/wal/WalDbProjector.java) |
-| `QuestDbTapeSink` (Phase D) | QuestDB over ILP (lazy connect) | [QuestDbTapeSink.java](../src/main/java/com/fxoee/wal/QuestDbTapeSink.java) |
+| `AeronWalProjector` | trade tape: `TradeStore` + WS `TradeEvent` | `AeronWalProjector.java:41` |
+| `WalDbProjector` (Phase B) | Postgres balances + position lots; periodic catch-up, idempotent via `fill_dedup`, incremental cursor | `WalDbProjector.java:33` |
+| `QuestDbTapeSink` (Phase D) | QuestDB over ILP (lazy connect) | `QuestDbTapeSink.java` |
 
 Bounded warm restart is **Phase E**: periodic + on-shutdown engine snapshots tagged with the exact
-Archive position, plus a recover-on-boot hook ([SpeedEngineConfig.java:303](../src/main/java/com/fxoee/engine/speed/SpeedEngineConfig.java))
+Archive position, plus a recover-on-boot hook (`SpeedEngineConfig.java:303`)
 that restores the snapshot and replays only the Archive tail. With `persist-archive=true` this is a
 **database-off durable lane**. Every `fxoee.wal.*` flag is **off by default** in `application.yml`;
 the local dev profile (`application-local.yml`) turns the WAL on. The branch added a DEBUG screen for
 the lane, backed by `OrderBookDebugController.pipelineStats()`
-([OrderBookDebugController.java:657](../src/main/java/com/fxoee/api/controller/rest/OrderBookDebugController.java),
+(`OrderBookDebugController.java:657`,
 `GET /api/debug/pipeline-stats`), which reports publication vs recording position and per-poller lag.
 
 ### Ingress shed (Fix B)
 
 Because the speed engine spins on Aeron back-pressure when the WAL drain falls behind, the submit path
 rejects **new** orders with `OVERLOADED` once WAL lag (publication minus recording position) exceeds
-`fxoee.wal.aeron.lag-threshold-bytes` ([SpeedMatchingService.java:177](../src/main/java/com/fxoee/engine/speed/SpeedMatchingService.java)).
+`fxoee.wal.aeron.lag-threshold-bytes` (`SpeedMatchingService.java:177`).
 The default is **48 MiB** (`50331648`), 75% of the 64 MiB IPC term buffer, auto-capped to 90% of the
 term buffer if set higher. This sheds cleanly at ingress instead of stalling the engine thread.
 
@@ -141,9 +141,9 @@ flowchart TB
 
 | Lock | Scope | Held during | Source |
 |------|-------|-------------|--------|
-| Book lock | per **pair** | the whole match loop + reserve + applyFills | [OrderBook.java:39](../src/main/java/com/fxoee/matching/OrderBook.java) |
-| Position lock | per **account** | one `applyFill` / `netQty` / `lots` read | [PositionBook.java:44](../src/main/java/com/fxoee/engine/position/PositionBook.java) |
-| Reconcile lock | per **account** | one `reconcile` pass | [MatchingService.java:128](../src/main/java/com/fxoee/engine/MatchingService.java) |
+| Book lock | per **pair** | the whole match loop + reserve + applyFills | `OrderBook.java:39` |
+| Position lock | per **account** | one `applyFill` / `netQty` / `lots` read | `PositionBook.java:44` |
+| Reconcile lock | per **account** | one `reconcile` pass | `MatchingService.java:128` |
 
 ### Why per-account position locks
 
@@ -158,11 +158,11 @@ contention: orders on different accounts never block each other.
 resting orders across all pairs**, so it acquires book locks for every pair. If `submit` called
 `reconcile` while still holding the aggressor pair's book lock, two concurrent submits on different
 pairs could each hold one book lock and wait for the other (ABBA). The fix
-([MatchingService.submit](../src/main/java/com/fxoee/engine/MatchingService.java:241)):
+(`MatchingService.submit`):
 
 1. Do validation, reserve, match, and apply-fills **inside** the book lock.
-2. **Release** the book lock ([MatchingService.java:367](../src/main/java/com/fxoee/engine/MatchingService.java)).
-3. Run `reconcileGuarded(account)` ([MatchingService.java:372](../src/main/java/com/fxoee/engine/MatchingService.java)) and any Kafka sends **outside** it.
+2. **Release** the book lock (`MatchingService.java:367`).
+3. Run `reconcileGuarded(account)` (`MatchingService.java:372`) and any Kafka sends **outside** it.
 
 `reconcileGuarded` takes a per-account reconcile lock so two recomputes for the same account never
 race, while different accounts still reconcile in parallel. This bug and fix are captured in a
@@ -176,7 +176,7 @@ slow broker never freezes a pair's hot path.
 
 ## Configuration
 
-Key properties from [application.yml](../src/main/resources/application.yml):
+Key properties from `application.yml`:
 
 | Property | Default | Effect |
 |----------|---------|--------|

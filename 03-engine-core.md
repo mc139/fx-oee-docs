@@ -2,26 +2,26 @@
 
 _Last updated: 2026-06-21 BST._
 
-This is the spine of the system. [MatchingService](../src/main/java/com/fxoee/engine/MatchingService.java)
+This is the spine of the system. `MatchingService`
 is the **source of truth**; everything else projects from it. It coordinates five collaborators, all
 pure (no Spring/Kafka/DB):
 
 | Collaborator | Responsibility | Source |
 |--------------|----------------|--------|
 | `MatchingEngine` + `OrderBook` | price-time matching per pair | [doc 02](02-matching-engine.md) |
-| `PreTradeValidator` | structural + funds checks, reserve margin | [PreTradeValidator.java](../src/main/java/com/fxoee/engine/validate/PreTradeValidator.java) |
-| `PositionBook` | FIFO position netting, realized P&L, lot events | [PositionBook.java](../src/main/java/com/fxoee/engine/position/PositionBook.java) |
-| `MarginLedger` | cash + locked margin per account | [MarginLedger.java](../src/main/java/com/fxoee/engine/ledger/MarginLedger.java) |
-| `Margin` | the single funding-requirement calculator | [Margin.java](../src/main/java/com/fxoee/engine/ledger/Margin.java) |
+| `PreTradeValidator` | structural + funds checks, reserve margin | `PreTradeValidator.java` |
+| `PositionBook` | FIFO position netting, realized P&L, lot events | `PositionBook.java` |
+| `MarginLedger` | cash + locked margin per account | `MarginLedger.java` |
+| `Margin` | the single funding-requirement calculator | `Margin.java` |
 
-> Two engines implement this spine behind the [TradingEngine](../src/main/java/com/fxoee/engine/TradingEngine.java)
+> Two engines implement this spine behind the `TradingEngine`
 > interface, selected by `fxoee.engine.mode`: the **`default`** `MatchingService` documented here, and
 > the **`speed`** engine, whose [submit path](#speed-engine-submit-path) runs the same five phases on a
 > single-writer thread.
 
 ## The submit pipeline
 
-`MatchingService.submit(Order)` runs five phases ([MatchingService.java:271](../src/main/java/com/fxoee/engine/MatchingService.java)).
+`MatchingService.submit(Order)` runs five phases (`MatchingService.java:271`).
 Phase 1 (structural), the pre-trade risk gate, and the load-shed check run **before** any lock; phases
 2-4 (reserve, match, apply fills) hold the pair's book lock; phase 5 (reconcile) runs after release
 (see [Architecture, ABBA section](01-architecture.md#the-abba-deadlock-and-how-its-avoided)).
@@ -90,7 +90,7 @@ matching. The whole-order rule applies: an order is fully funded or fully reject
 
 #### MARKET BUY funding
 
-A MARKET BUY has no price, so [MarketBuyEstimator](../src/main/java/com/fxoee/engine/match/MarketBuyEstimator.java)
+A MARKET BUY has no price, so `MarketBuyEstimator`
 walks the ask depth (best to worst) under the **same book lock** as the match. Because the book can't
 change between estimate and sweep, the depth-walk cost **equals** the actual sweep cost: the
 reservation is exact, not over-reserved. (Best-ask alone is not worst-case; asks ascend, so deeper
@@ -114,11 +114,11 @@ non-house traders. See [doc 04](04-funding-pnl-conservation.md#taker-fee).
 ### Phase 5: reconcile (authoritative margin)
 
 After the book lock is released, `reconcile(account)`
-([MatchingService.java:847](../src/main/java/com/fxoee/engine/MatchingService.java)) sets locked
+(`MatchingService.java:847`) sets locked
 margin to its **authoritative** value: held-position margin + the margin required by each live resting
 order (each netted against the current position, so a resting order that merely closes a position
 locks nothing). This replaces the worst-case amount reserved in phase 2 and **releases any excess**.
-It runs through `reconcileGuarded` ([MatchingService.java:831](../src/main/java/com/fxoee/engine/MatchingService.java)),
+It runs through `reconcileGuarded` (`MatchingService.java:831`),
 a per-account lock that serializes recomputes for the same account while keeping cross-account
 reconciles parallel.
 
@@ -141,10 +141,10 @@ flowchart TD
 
 In speed mode (`fxoee.engine.mode=speed`) the same five phases run, but the request thread does almost
 none of the work: it converts the order to fixed-point longs, hands a command to the single-writer
-[SpeedEngine](../src/main/java/com/fxoee/engine/speed/SpeedEngine.java) thread over a Disruptor ring,
+`SpeedEngine` thread over a Disruptor ring,
 and the engine thread runs structural-aware reservation, matching, fill application, and reconcile
 **without any lock** (it owns all state). The facade
-[SpeedMatchingService.submit](../src/main/java/com/fxoee/engine/speed/SpeedMatchingService.java)
+`SpeedMatchingService.submit`
 materialises the report and projection events from primitive results afterward.
 
 The phase mapping is 1:1 with the default engine:
@@ -214,9 +214,9 @@ pair. See [speed-engine-architecture.md](speed-engine-architecture.md) for the t
 ## PositionBook: FIFO netting
 
 No-hedge, FIFO-netting position store. Lots are held per `(account, pair)` in arrival order. One
-`applyFill` ([PositionBook.java:107](../src/main/java/com/fxoee/engine/position/PositionBook.java))
+`applyFill` (`PositionBook.java:107`)
 turns a fill into position changes + realized P&L and returns a
-[FillOutcome](../src/main/java/com/fxoee/engine/position/FillOutcome.java); it never touches cash.
+`FillOutcome`; it never touches cash.
 
 ```mermaid
 flowchart TD

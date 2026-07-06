@@ -98,7 +98,7 @@ minikube start
 ./scripts/bootstrap-cluster.sh
 ```
 
-[bootstrap-cluster.sh](../scripts/bootstrap-cluster.sh) enables the `ingress` and `metrics-server`
+`bootstrap-cluster.sh` enables the `ingress` and `metrics-server`
 addons, then runs `kubectl apply -k k8s/overlays/local/` (retrying until the nginx admission webhook
 is serving). Idempotent, so it's safe to re-run.
 
@@ -115,7 +115,7 @@ is serving). Idempotent, so it's safe to re-run.
 ./scripts/deploy-minikube.sh
 ```
 
-[deploy-minikube.sh](../scripts/deploy-minikube.sh) builds `localhost/fx-oee-backend:dev` directly
+`deploy-minikube.sh` builds `localhost/fx-oee-backend:dev` directly
 into Minikube's container runtime (`eval $(minikube docker-env)` for docker; podman builds locally
 then `minikube image load`). After applying the base backend manifests it patches `imagePullPolicy`
 to `IfNotPresent` and removes `imagePullSecrets` so no registry auth is attempted.
@@ -273,7 +273,7 @@ Push to `master` → CI passes → `deploy-hetzner.yml` runs:
 bash <(curl -fsSL https://raw.githubusercontent.com/mc139/fx-oee/master/scripts/hetzner-init.sh)
 ```
 
-[hetzner-init.sh](../scripts/hetzner-init.sh) installs k3s, generates SSH keys, and prints the
+`hetzner-init.sh` installs k3s, generates SSH keys, and prints the
 values to paste into GitHub secrets. Then clone the repo:
 
 ```bash
@@ -293,7 +293,7 @@ kubectl apply -k k8s/overlays/prod/
 
 ## Pod resources & probes
 
-[deployment.yaml](../k8s/base/backend/deployment.yaml) requests `2` CPU / `2Gi`, limits `6` CPU /
+`deployment.yaml` requests `2` CPU / `2Gi`, limits `6` CPU /
 `3Gi` (the speed engine + Aeron WAL want headroom). JVM flags (via `JAVA_TOOL_OPTIONS`): `-Xms1g
 -Xmx2g -XX:+UseG1GC -XX:MaxGCPauseMillis=100`, plus the Agrona `--add-opens` and the JDWP agent.
 
@@ -336,7 +336,7 @@ deployed for topic inspection.
 docker compose up --build
 ```
 
-[docker-compose.yml](../docker-compose.yml) starts nginx, backend, postgres, zookeeper, kafka,
+`docker-compose.yml` starts nginx, backend, postgres, zookeeper, kafka,
 postgres-exporter, prometheus, and grafana with health-gated ordering. nginx fronts the app on
 port 80, and the backend is also reachable directly on 8080.
 
@@ -403,17 +403,17 @@ The local dev script wires the whole lane for you (see
 For a **true DB-off durable lane**, combine `persist-archive=true` + `snapshot.enabled=true` +
 `bootstrap.clear-on-start=false` + `recovery.replay-on-startup=false`: the Aeron WAL is then the sole
 source of truth and the engine warm-restarts from snapshot + tail with no database in the loop. The
-full flag list is in [application.yml](../src/main/resources/application.yml) under `fxoee.wal.*`.
+full flag list is in `application.yml` under `fxoee.wal.*`.
 
 ---
 
 ## ConfigMap (deployed defaults)
 
-The non-secret runtime knobs live in [backend-config](../k8s/base/backend/configmap.yaml) (`envFrom`
+The non-secret runtime knobs live in `backend-config` (`envFrom`
 into the backend container; secrets such as `TIINGO_API_KEY` come from `backend-secret`). Both the
 local and prod overlays inherit this base ConfigMap unchanged. The cluster runs **Lane 2** (speed
 engine + Aeron WAL + QuestDB), which is the opposite of the safe local/test defaults in
-[application.yml](../src/main/resources/application.yml). The load-bearing values as deployed:
+`application.yml`. The load-bearing values as deployed:
 
 | Key | Value | Notes |
 |-----|-------|-------|
@@ -443,5 +443,5 @@ engine + Aeron WAL + QuestDB), which is the opposite of the safe local/test defa
 ## Configuration reference
 
 All runtime knobs are environment variables consumed by
-[application.yml](../src/main/resources/application.yml). See
+`application.yml`. See
 [Configuration reference](10-configuration.md) for the full list.

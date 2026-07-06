@@ -2,7 +2,7 @@
 
 _Last updated: 2026-06-21 BST._
 
-The API layer ([com.fxoee.api](../src/main/java/com/fxoee/api)) is a thin adapter: it parses requests,
+The API layer (`com.fxoee.api`) is a thin adapter: it parses requests,
 calls `MatchingService` (or reads a projection), and serializes the result. There are two order-entry
 surfaces (a generic `/api` one and the engine-native `/api/engine` one) plus account, debug,
 simulation, auth, and WebSocket endpoints. A FIX 4.4 acceptor offers a third order-entry surface when
@@ -32,7 +32,7 @@ flowchart LR
 
 ## Order entry
 
-### Engine-native: [EngineOrderController](../src/main/java/com/fxoee/api/controller/rest/EngineOrderController.java) (`/api/engine`)
+### Engine-native: `EngineOrderController` (`/api/engine`)
 
 | Method | Path | Body / params | Returns |
 |--------|------|---------------|---------|
@@ -52,7 +52,7 @@ and calls `MatchingService.submit`; the `ExecutionReport` carries status, fills,
 reason, and taker fee. This surface requires an authenticated USER token; the order owner is always
 the token principal, never a body field.
 
-### Generic: [OrderController](../src/main/java/com/fxoee/api/controller/rest/OrderController.java) (`/api`)
+### Generic: `OrderController` (`/api`)
 
 The order-entry and positions routes require an `Authorization: Bearer <jwt>` header; the account is
 the JWT subject, not a body field. The read-only `/orderbook` and `/trades` routes take no header.
@@ -66,7 +66,7 @@ the JWT subject, not a body field. The read-only `/orderbook` and `/trades` rout
 | GET | `/positions` | needs `Authorization` header | open positions for the JWT's account |
 
 `PlaceOrderRequest = { pair, side, type, price, quantity, clientOrderId }` (all `String`; see
-[OrderService](../src/main/java/com/fxoee/service/OrderService.java)). `price` is null/omitted for
+`OrderService`). `price` is null/omitted for
 MARKET orders; `clientOrderId` is optional and echoed back on the report. The account is taken from
 the JWT, not the body. `DELETE /orders/{id}` returns the cancelled `Order` (200) or `404` if no such
 resting order is found.
@@ -78,14 +78,14 @@ code); depth comes from the request param. See [doc 10](10-configuration.md#stil
 
 | Method | Path | Returns | Source |
 |--------|------|---------|--------|
-| GET | `/api/account/balance` | `{ "balance": <decimal> }`; 401 if no/invalid `Authorization: Bearer`, 404 if account unknown | [AccountController](../src/main/java/com/fxoee/api/controller/rest/AccountController.java) |
+| GET | `/api/account/balance` | `{ "balance": <decimal> }`; 401 if no/invalid `Authorization: Bearer`, 404 if account unknown | `AccountController` |
 
 When `fxoee.engine.authoritative=true`, account reads reflect the in-JVM `MatchingService` state
 (Kafka still projects fills to the DB asynchronously).
 
 ## Debug & simulation
 
-### [DebugController](../src/main/java/com/fxoee/api/controller/rest/DebugController.java) (`/api/account/debug`)
+### `DebugController` (`/api/account/debug`)
 
 JWT-bound to the caller's own account (every endpoint takes the `Authorization` header; a bad token is `401`).
 
@@ -102,7 +102,7 @@ validate the token and echo `{ rows: [], total: 0, limit, offset }` (the engine 
 historical closed-lot/transaction reads are not wired to a store here). The `counts` block in the main
 debug view reports `closedLots: 0, transactions: 0` for the same reason.
 
-### [OrderBookDebugController](../src/main/java/com/fxoee/api/controller/rest/OrderBookDebugController.java) (`/api/debug`)
+### `OrderBookDebugController` (`/api/debug`)
 
 | Method | Path | Body / params | Purpose |
 |--------|------|---------------|---------|
@@ -116,7 +116,7 @@ debug view reports `closedLots: 0, transactions: 0` for the same reason.
 | GET | `/pending-orders` | none | resting orders per pair, bid/ask split |
 | GET | `/engine-stats` | none | Micrometer counters: submitted / placed / cancelled / rejected / risk-rejected / volume + matching-latency percentiles |
 | GET | `/pipeline-stats` | none | WAL durable-pipeline telemetry (see below) |
-| POST | `/simulate/start` | `SimConfig` body (optional) | start [SimulatorService](../src/main/java/com/fxoee/application/SimulatorService.java) |
+| POST | `/simulate/start` | `SimConfig` body (optional) | start `SimulatorService` |
 | POST | `/simulate/stop` | none | stop the simulator |
 | GET | `/simulate/status` | none | simulation status |
 
@@ -144,7 +144,7 @@ Response fields: `status`, `accountsReset`, `initialBalance`, `tablesTruncated[]
 Backs the DEBUG-panel **STATS** screen that visualizes the WAL → Postgres / QuestDB pipeline. Every
 value is a lock-free counter / cached-atomic read on the request thread; nothing touches the engine
 thread or the WAL poll thread, so polling it has zero effect on matching throughput. All lanes report
-`enabled=false` / `0` when the speed+WAL lane is off ([OrderBookDebugController.java:657](../src/main/java/com/fxoee/api/controller/rest/OrderBookDebugController.java)).
+`enabled=false` / `0` when the speed+WAL lane is off (`OrderBookDebugController.java:657`).
 
 ```mermaid
 flowchart LR
@@ -168,7 +168,7 @@ flowchart LR
 | `questdb.enabled` | `QuestDbTapeSink` present |
 | `questdb.{tapePosition, lagBytes, droppedBroadcasts}` | archive bytes drained into the tape; recorded-but-not-yet-on-tape gap; dropped WS broadcasts (`wal.broadcast.dropped.total`) |
 
-## Auth: [AuthController](../src/main/java/com/fxoee/infrastructure/auth/AuthController.java) (`/api/auth`)
+## Auth: `AuthController` (`/api/auth`)
 
 | Method | Path | Body | Returns |
 |--------|------|------|---------|
@@ -178,16 +178,16 @@ Tokens are HS256, signed with `jwt.secret`, valid for `jwt.expiry-days` (= 7). R
 JWT from the `Authorization: Bearer` header; WebSocket handshakes are authenticated by
 `JwtHandshakeInterceptor` (see below).
 
-## WebSocket: [TradingWebSocketHandler](../src/main/java/com/fxoee/api/websocket/TradingWebSocketHandler.java) (`/ws/trading`)
+## WebSocket: `TradingWebSocketHandler` (`/ws/trading`)
 
 A thin handler that parses client messages, dispatches order actions to `MatchingService`, and streams
 market data + account snapshots back. The handshake is authenticated by
-[JwtHandshakeInterceptor](../src/main/java/com/fxoee/infrastructure/auth/JwtHandshakeInterceptor.java):
+`JwtHandshakeInterceptor`:
 the JWT is passed as a `?token=<jwt>` query parameter (not a header), and a missing/invalid token gets
-a 401 before the socket opens ([WebSocketConfig.java:27](../src/main/java/com/fxoee/config/WebSocketConfig.java)).
+a 401 before the socket opens (`WebSocketConfig.java:27`).
 Idle sessions time out after 30s. Supported chart timeframes: `1m, 5m, 15m, 30m, 1h, 4h, 1d`.
 Live ticks come from either the live [Tiingo feed](market-data.md) or the
-[MockMarketMaker](../src/main/java/com/fxoee/infrastructure/marketdata/MockMarketMaker.java)
+`MockMarketMaker`
 when `fxoee.mock-market.enabled=true` (it injects matched LIMIT BUY/SELL depth for the house account
 every 500ms and seeds OHLC candle history at startup).
 
@@ -217,14 +217,14 @@ The notable ones:
 
 ## Errors
 
-Domain rejections ([RejectReason](../src/main/java/com/fxoee/engine/validate/RejectReason.java):
+Domain rejections (`RejectReason`:
 `INVALID_QUANTITY`, `UNSUPPORTED_PAIR`, `INSUFFICIENT_FUNDS`) are returned in the `ExecutionReport`.
 Load shedding adds a non-enum reason string `OVERLOADED` (set directly on the report when the async
 fill queue is saturated). The pre-trade risk gate adds its own reasons
-([RiskRejectReason](../src/main/java/com/fxoee/risk/RiskRejectReason.java): `KILLSWITCH`,
+(`RiskRejectReason`: `KILLSWITCH`,
 `MARKET_HALTED`, `ORDER_NOTIONAL_LIMIT`, `POSITION_LIMIT`, `EXPOSURE_LIMIT`; see
 [doc 11](11-risk-controls.md)). Transport-level mapping to HTTP statuses is handled by
-[GlobalExceptionHandler](../src/main/java/com/fxoee/api/controller/rest/GlobalExceptionHandler.java).
+`GlobalExceptionHandler`.
 
 | HTTP | `code` | Trigger |
 |------|--------|---------|

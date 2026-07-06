@@ -10,7 +10,7 @@ This is the operational counterpart to the automated coverage in
 described in [05-event-sourcing-persistence.md](05-event-sourcing-persistence.md#warm-restart-recovery-engine-replay).
 
 > **Which lane is deployed?** As of this writing the in-cluster config
-> ([k8s/base/backend/configmap.yaml](../k8s/base/backend/configmap.yaml)) defaults to the **speed
+> (`k8s/base/backend/configmap.yaml`) defaults to the **speed
 > engine + Aeron WAL + QuestDB lane** (`FXOEE_ENGINE_MODE=speed`, `KAFKA_ENABLED=false`,
 > `FXOEE_WAL_*_ENABLED=true`), with **`FXOEE_RECOVERY_REPLAY_ON_STARTUP=false`** and no persisted
 > Archive volume, so each pod boot is a **fresh start**, not a warm restart. Sections 2-6 below
@@ -61,7 +61,7 @@ sequenceDiagram
 
 Sections 2-6 cover **Lane 1** (default engine + `trade_events` Kafka event-sourcing). The shipped
 configmap now defaults to the **speed + WAL lane**, so first switch the relevant keys in
-[k8s/base/backend/configmap.yaml](../k8s/base/backend/configmap.yaml):
+`k8s/base/backend/configmap.yaml`:
 
 ```yaml
 FXOEE_ENGINE_MODE: "default"               # lock-based engine (was: speed)
@@ -287,6 +287,6 @@ this is one command:
 ```
 
 > **Caveat (in-cluster).** The shipped manifests do not yet attach a PVC for the Aeron dirs, so 7c
-> needs a volume added to [the backend deployment](../k8s/base/backend/deployment.yaml) before it
+> needs a volume added to `the backend deployment` before it
 > survives a pod reschedule. The automated `SpeedWalCrossRestartRecoveryTest` proves the mechanism
 > end-to-end against persisted dirs today.

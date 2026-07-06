@@ -6,7 +6,7 @@ The engine is tested as a **pure unit**: `EngineTestSupport.newService(mode)` wi
 `MatchingService` (all 7 pairs, no Spring/Kafka/DB) so tests run in milliseconds. Maven is the build
 tool (`mvn test`).
 
-Three Maven profiles gate the slower edges (see [pom.xml](../pom.xml)):
+Three Maven profiles gate the slower edges (see `pom.xml`):
 
 - default `mvn test` runs **everything** except the `perf` micro-benchmarks (those are `@Tag("perf")`,
   excluded by `<excludedGroups>perf</excludedGroups>`).
@@ -139,7 +139,7 @@ separately below.
 
 ## Speed engine and Aeron WAL coverage
 
-The `speed` engine ([`com.fxoee.engine.speed`](../src/main/java/com/fxoee/engine/speed)) is verified
+The `speed` engine (`com.fxoee.engine.speed`) is verified
 the same way the default engine is, plus a durability lane of its own (ADR 0007). The differential
 fuzz test keeps the two engines honest against each other; the WAL suites prove the Aeron Archive is a
 faithful, replayable source of truth that can rebuild the engine across a real process kill, with no

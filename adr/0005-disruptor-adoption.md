@@ -14,7 +14,7 @@ First, the interim queue carried known costs: `ConcurrentLinkedQueue` allocates 
 (steady GC pressure under load) and is unbounded by design, so the heap bound lived entirely in the
 upstream `isOverloaded` shedding check rather than in the queue's structure.
 
-Second, the **speed engine** ([`SpeedEngine`](../../src/main/java/com/fxoee/engine/speed/SpeedEngine.java),
+Second, the **speed engine** (`SpeedEngine`,
 `fxoee.engine.mode=speed`) needs a command transport into its single-writer matching thread that is
 bounded, pre-allocated, and allocation-free on the hot path. A single-writer engine only stays fast
 if commands reach it without locks, queue-node churn, or unbounded buffering, and if back-pressure is
@@ -30,15 +30,15 @@ became straightforward.
 
 Adopt the **LMAX Disruptor 4.0.0** in **two** places, while keeping a dependency-light fallback:
 
-1. **Speed-engine command ring.** [`SpeedEngine`](../../src/main/java/com/fxoee/engine/speed/SpeedEngine.java)
+1. **Speed-engine command ring.** `SpeedEngine`
    accepts commands through a multi-producer `Disruptor<EngineSlot>` ring
-   ([`EngineSlot`](../../src/main/java/com/fxoee/engine/speed/EngineSlot.java) carries one command as
+   (`EngineSlot` carries one command as
    pre-allocated `long` fields). Submitter threads claim a slot, write longs, and publish; the single
    engine thread consumes and matches with no book or account locks. The wait strategy is configurable
    (`busy-spin` default, `yielding`, `blocking`); the engine thread can be pinned to a core
    (`fxoee.engine.speed.cpu`). Results travel back in a caller-owned buffer, not the ring slot.
 
-2. **Fill hand-off queue.** [`DisruptorFillQueue`](../../src/main/java/com/fxoee/engine/DisruptorFillQueue.java)
+2. **Fill hand-off queue.** `DisruptorFillQueue`
    (active when `fxoee.queue.type=disruptor`, all queues also gated on `kafka.enabled=true`) replaces
    the interim queue's internals with a multi-producer ring of pre-allocated `FillEvent` slots,
    drained pull-based by the single `PersistenceWorker` thread via an `EventPoller`. It honours the
@@ -50,10 +50,10 @@ Adopt the **LMAX Disruptor 4.0.0** in **two** places, while keeping a dependency
    sets 1048576).
 
 **Two fallbacks retained, same `FillQueue` interface.** The boot default is the unbounded
-[`AgronaFillQueue`](../../src/main/java/com/fxoee/engine/AgronaFillQueue.java)
+`AgronaFillQueue`
 (`fxoee.queue.type=agrona`, `matchIfMissing=true`): an Agrona MPSC that never rejects, with the heap
 bound living entirely in the upstream `isOverloaded` shed.
-[`DefaultFillQueue`](../../src/main/java/com/fxoee/engine/DefaultFillQueue.java)
+`DefaultFillQueue`
 (`fxoee.queue.type=clq`) keeps the original `ConcurrentLinkedQueue` of [ADR 0004](0004-async-fill-queue-over-disruptor.md).
 So a deployment can run the fill hand-off without the Disruptor ring. The local dev script
 (`scripts/dev-local-backend.sh`) opts into `disruptor`; the speed engine's Disruptor command ring is

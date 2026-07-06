@@ -24,7 +24,7 @@ durability path for an Aeron Archive WAL whose recording position is the engine-
 
 When the engine finishes a fill it has the authoritative effects in hand: per-side `cashDelta`, realized
 `pnl`, and lot events carrying **engine lot ids**. Every event it emits (e.g.
-[TradeExecuted](../src/main/java/com/fxoee/events/kafka/event/TradeExecuted.java)) carries those effects,
+`TradeExecuted`) carries those effects,
 so **every projection is a pure writer** that applies them verbatim. No consumer re-derives open/close,
 cash, or P&L; reservations live in the engine only. This is what keeps the DB and the in-memory mirror
 from drifting away from the engine, and it holds identically in both lanes.
@@ -36,8 +36,8 @@ from drifting away from the engine, and it holds identically in both lanes.
 ### The hot path doesn't block on Kafka
 
 When the lock engine finishes a fill it packages the effects into a
-[PendingFill](../src/main/java/com/fxoee/engine/PendingFill.java) and offers it to the
-[FillQueue](../src/main/java/com/fxoee/engine/FillQueue.java) in ~1µs. Kafka and DB writes never happen
+`PendingFill` and offers it to the
+`FillQueue` in ~1µs. Kafka and DB writes never happen
 under the book lock. The default `FillQueue` impl is `agrona` (unbounded Agrona MPSC); `clq`
 (`ConcurrentLinkedQueue`, sheds at high-water) and `disruptor` are alternatives (`fxoee.queue.type`).
 
@@ -64,24 +64,24 @@ behind, rejects the order with reason `OVERLOADED`: no book lock, no fill, no re
 
 ### PersistenceWorker ordering guarantee
 
-The worker ([PersistenceWorker.java](../src/main/java/com/fxoee/engine/PersistenceWorker.java), drains
+The worker (`PersistenceWorker.java`, drains
 `fxoee.persistence.batch-max`, default 512) does, per drained batch: **(1)** `appendBatch`'s each
-`TradeExecuted` to `trade_events` ([PersistenceWorker.java:148](../src/main/java/com/fxoee/engine/PersistenceWorker.java#L148)),
+`TradeExecuted` to `trade_events` (`PersistenceWorker.java:148`),
 **(2)** publishes the per-account legs to Kafka, **(3)** marks the rows published once **all** legs are
 broker-confirmed (per-event countdown, on the ack callback,
-[PersistenceWorker.java:176](../src/main/java/com/fxoee/engine/PersistenceWorker.java#L176)), **(4)** then
+`PersistenceWorker.java:176`), **(4)** then
 emits the terminal `OrderMatched`. Append happens **before** publish, so the log is the single committed
 source both projections derive from. The sends are pipelined async (no per-batch broker join); a partial
 publish re-enqueues the owner. Failed batches are re-enqueued, never dropped.
 
-Producer settings ([application.yml](../src/main/resources/application.yml)): `acks=all`,
+Producer settings (`application.yml`): `acks=all`,
 `enable.idempotence=true`, `max.in.flight.requests.per.connection=5`, `batch-size=262144`,
 `compression-type=zstd`, `buffer-memory=67108864` (64 MiB), `linger.ms=20`. This pipelining + batching is
 what makes the worker the end-to-end throughput bottleneck (~300-1000 trades/s local), not matching CPU.
 
 ### The durable log: `trade_events`
 
-[V9__create_trade_events.sql](../src/main/resources/db/migration/V9__create_trade_events.sql):
+`V9__create_trade_events.sql`:
 
 ```sql
 CREATE TABLE trade_events (
@@ -109,7 +109,7 @@ off the Kafka stream the log feeds) derive from the same committed rows, so they
 
 ### Kafka topics
 
-[KafkaTopicConfig](../src/main/java/com/fxoee/config/KafkaTopicConfig.java) declares the topics.
+`KafkaTopicConfig` declares the topics.
 Partition count = number of currency pairs (7); messages are keyed so all events for a key land on one
 partition (per-pair / per-account ordering).
 
@@ -126,7 +126,7 @@ partition (per-pair / per-account ordering).
 `fills.applied`, `account.snapshotted`, and `trading.halted` have **no `@KafkaListener`** inside the
 app: they exist for downstream / WebSocket consumers. `trading.halted` is the thinnest of the three. It
 is produced only when the circuit breaker halts a pair
-([CircuitBreaker.onTrade](../src/main/java/com/fxoee/service/CircuitBreaker.java#L74), gated on
+(`CircuitBreaker.onTrade`, gated on
 `fx.circuit-breaker.enabled`) and nothing else reads it; the live WebSocket halt broadcast goes out
 separately via `wsHandler.broadcastStatus`, so the topic is effectively a stub fan-out.
 
@@ -150,18 +150,18 @@ flowchart TB
 
 #### FillConsumer
 
-[FillConsumer](../src/main/java/com/fxoee/events/kafka/FillConsumer.java) consumes
+`FillConsumer` consumes
 `trades.byaccount` and applies the engine-stamped cash and lot effects to the DB and the `AccountState`
 mirror **without re-deriving** any open/close or cash math. It replays exactly what the engine decided,
 keyed on engine lot ids. **Dedup** is durable: the `fill_dedup` table
-([V12__create_fill_dedup.sql](../src/main/resources/db/migration/V12__create_fill_dedup.sql)) claims a
+(`V12__create_fill_dedup.sql`) claims a
 row per `(trade_id, leg)` inside the same transaction as the projection write (`leg ∈ {BUY, SELL,
 FEE_TAKER, FEE_HOUSE}`), so a Kafka redelivery or a warm-restart relay is idempotent and a rolled-back
 projection rolls back its claim.
 
 #### SnapshotConsumer
 
-[SnapshotConsumer](../src/main/java/com/fxoee/events/kafka/SnapshotConsumer.java) consumes
+`SnapshotConsumer` consumes
 `OrderMatched`: unregisters terminal orders from `OrderRegistry`, builds an account snapshot (throttled
 to one per second), and publishes `AccountSnapshotted` + a Spring `AccountSnapshotEvent` for the
 WebSocket layer. Snapshots may briefly lag fills (separate topic, no cross-topic ordering). Dedup by
@@ -254,27 +254,27 @@ When `fxoee.engine.mode=speed` **and** `fxoee.wal.aeron.enabled=true`, matching 
 Kafka**. The engine records every fill to an embedded **Aeron Archive** on local NVMe, and that recording
 is the single source of truth. Three downstream pollers read the Archive; the engine stays authoritative
 for balances, so neither Kafka nor the `FillQueue` is wired
-([SpeedEngineConfig.java:124-150](../src/main/java/com/fxoee/engine/speed/SpeedEngineConfig.java#L124)).
+(`SpeedEngineConfig.java:124-150`).
 All `fxoee.wal.*` flags are off by default; `scripts/dev-local-backend.sh --wal` turns the lane on
 (`--questdb` adds the QuestDB tape, `--wal-durable` adds a persisted Archive + snapshots).
 
 ### Recording: engine thread → Aeron Archive
 
-The SBE `FillRecord` ([FillCodec](../src/main/java/com/fxoee/engine/speed/wal/FillCodec.java),
-[FillRecordData](../src/main/java/com/fxoee/engine/speed/wal/FillRecordData.java); generated codecs in
+The SBE `FillRecord` (`FillCodec`,
+`FillRecordData`; generated codecs in
 `com.fxoee.engine.speed.wal.sbe`) is a whole-trade record (per-side cashDelta/pnl, fees, lot events with
 engine lot ids). The engine encodes a fill into its reusable `FillRecordData` and calls
 `wal.append(r)` / `flushWal()` on the **engine thread**
-([SpeedEngine.java:442](../src/main/java/com/fxoee/engine/speed/SpeedEngine.java#L442)).
-[WalPublisher](../src/main/java/com/fxoee/wal/WalPublisher.java) batches many fills into one Aeron
+(`SpeedEngine.java:442`).
+`WalPublisher` batches many fills into one Aeron
 message (flush at ~60 KiB so per-message recorder overhead is paid once per batch, not per fill) and
 offers it to an `ExclusivePublication` on the IPC channel; the embedded
-[AeronWal](../src/main/java/com/fxoee/wal/AeronWal.java) `ArchivingMediaDriver` records that stream. The
+`AeronWal` `ArchivingMediaDriver` records that stream. The
 record buffer grows on demand so a large lot-event group can never overrun it.
 
 The Archive **recording position is the engine-stamped monotonic sequence** ADR 0006 lacked, so the
 snapshot cut is exact (no opportunistic guard). Trade and lot ids are deterministic functions of the fill
-sequence ([WalIds](../src/main/java/com/fxoee/engine/speed/wal/WalIds.java)), so replay reproduces
+sequence (`WalIds`), so replay reproduces
 identical ids and dedup is idempotent.
 
 ```mermaid
@@ -292,9 +292,9 @@ flowchart TB
 
 ### Poller 1 - AeronWalProjector: the trade tape
 
-[AeronWalProjector](../src/main/java/com/fxoee/wal/AeronWalProjector.java) subscribes to a **following
+`AeronWalProjector` subscribes to a **following
 replay** of the Archive (so a slow tape consumer can't gate the engine's live publication,
-[AeronWal.java:160](../src/main/java/com/fxoee/wal/AeronWal.java#L160)) and runs two threads:
+`AeronWal.java:160`) and runs two threads:
 
 - `wal-projector` (`pollLoop`): drains the WAL at memory speed, `WalFillConverter.toTrade` → `TradeStore`
   (O(1) in-mem history), and offers each `TradeEvent` to a bounded SPSC queue
@@ -308,7 +308,7 @@ already ran). When `fxoee.wal.questdb.enabled=true` it also calls `questDb.recor
 
 ### Poller 2 - WalDbProjector: Postgres account state
 
-[WalDbProjector](../src/main/java/com/fxoee/wal/WalDbProjector.java)
+`WalDbProjector`
 (`fxoee.wal.postgres.enabled=true`) is an **off-engine periodic catch-up** (`wal-db-projector` daemon,
 `interval-ms` default 200) that replays the Archive tail and lands per-account balances + position lots in
 Postgres, so `/api/debug/state` tracks the engine instead of a frozen initial deposit. It is a lagging
@@ -317,21 +317,21 @@ downstream replica, not on the hot path. Key properties:
 - **Idempotent** via the same `fill_dedup` table (`flushLegs`'s `(trade_id, leg)` claim).
 - **Incremental cursor.** `catchUp` commits the durable cursor at **fragment boundaries throughout** the
   replay (not only at the very end), so a large backlog shows steady progress and a crash re-replays at
-  most one batch ([WalDbProjector.java:197-243](../src/main/java/com/fxoee/wal/WalDbProjector.java#L197)).
+  most one batch (`WalDbProjector.java:197-243`).
   The cursor lives in `wal_projection_offset`
-  ([V14__wal_projection_offset.sql](../src/main/resources/db/migration/V14__wal_projection_offset.sql),
+  (`V14__wal_projection_offset.sql`,
   one row: `recording_id + position + last_seq`) via
-  [WalProjectionOffsetRepository](../src/main/java/com/fxoee/persistence/WalProjectionOffsetRepository.java).
+  `WalProjectionOffsetRepository`.
 - **Seeds a bounded backfill.** First run seeds from the latest snapshot (`seedIfNeeded` →
   `fills.seedFromSnapshot`) or cold-starts at recording position 0
-  ([WalDbProjector.java:102](../src/main/java/com/fxoee/wal/WalDbProjector.java#L102)).
+  (`WalDbProjector.java:102`).
 - **Prune-safe.** A cursor from a pruned/reset Archive is detected via `AeronWal.isReplayable` and
   triggers `clearAndReseed` (the fresh engine reissues the same deterministic trade ids from 0, so a
   surviving `fill_dedup` would otherwise drop every re-projected leg).
 - **Hard-reset without deadlock.** `runExclusive` serialises the catch-up loop against destructive ops
   (TRUNCATE + `resetToArchiveEnd`) under one `projectionLock`, so a `TRUNCATE` can't deadlock an in-flight
   `flushLegs` that grabs the same tables in the opposite order
-  ([WalDbProjector.java:156-184](../src/main/java/com/fxoee/wal/WalDbProjector.java#L156)).
+  (`WalDbProjector.java:156-184`).
 - **Self-diagnosing.** `lastError` / `lastCatchUpMs` / `lagBytes` (gauge `wal.db.lag.bytes`) surface to
   the debug screen.
 
@@ -341,7 +341,7 @@ downstream replica, not on the hot path. Key properties:
 
 ### Poller 3 - QuestDbTapeSink: SQL trade history
 
-[QuestDbTapeSink](../src/main/java/com/fxoee/wal/QuestDbTapeSink.java)
+`QuestDbTapeSink`
 (`fxoee.wal.questdb.enabled=true`) writes the SQL-queryable trade tape to QuestDB over ILP
 (`fxoee.wal.questdb.ilp`, default `http::addr=localhost:9000;`), fed by the AeronWalProjector off the hot
 path. It connects **lazily** on first flush (the app boots before QuestDB is reachable) and creates the
@@ -356,23 +356,23 @@ remain the durable source of truth. The TTL ships in the `CREATE TABLE` for a fr
 
 Backpressure moves from a queue high-water to the Aeron publication. The WAL lag is
 `publicationPosition − recordingPosition` in bytes
-([AeronWal.walLagBytes](../src/main/java/com/fxoee/wal/AeronWal.java#L142)). When it exceeds
+(`AeronWal.walLagBytes`). When it exceeds
 `fxoee.wal.aeron.lag-threshold-bytes` (default `50331648` = 48 MiB, i.e. 75% of the 64 MiB IPC term),
 `SpeedMatchingService` rejects a **new** order `OVERLOADED` **before** it can push a fill burst past the
 term buffer and stall the engine on a back-pressured `offer`
-([SpeedMatchingService.java:177](../src/main/java/com/fxoee/engine/speed/SpeedMatchingService.java#L177)).
+(`SpeedMatchingService.java:177`).
 The threshold is auto-capped to 90% of `term-buffer-length`
-([SpeedEngineConfig.java:136](../src/main/java/com/fxoee/engine/speed/SpeedEngineConfig.java#L136)). The
+(`SpeedEngineConfig.java:136`). The
 single-writer engine thread never blocks on WAL back-pressure.
 
 ### Engine snapshots + bounded warm restart (Phase E)
 
-With `fxoee.wal.snapshot.enabled=true`, [Snapshotter](../src/main/java/com/fxoee/wal/Snapshotter.java) +
-[SnapshotStore](../src/main/java/com/fxoee/wal/SnapshotStore.java) (the **`com.fxoee.wal`** one, a JSON
+With `fxoee.wal.snapshot.enabled=true`, `Snapshotter` +
+`SnapshotStore` (the **`com.fxoee.wal`** one, a JSON
 file) pin engine state plus the **exact Archive recording/position** to `fxoee.wal.snapshot.file`,
-periodically and on shutdown ([SnapshotSchedule](../src/main/java/com/fxoee/wal/SnapshotSchedule.java),
+periodically and on shutdown (`SnapshotSchedule`,
 `interval-ms` default 30000). On boot,
-[SpeedEngineConfig.walRecoverOnBoot](../src/main/java/com/fxoee/engine/speed/SpeedEngineConfig.java#L303)
+`SpeedEngineConfig.walRecoverOnBoot`
 (a `SmartInitializingSingleton`, so it fires after `AccountBootstrapper` seeds and before traffic)
 restores each account (`engine.restore`) and replays **only** the Archive tail from the snapshot position
 (`Snapshotter.recover` → `AeronWal.replayForRecovery`), then raises the fill-seq high-water and
@@ -411,7 +411,7 @@ Surviving a real restart (not just an in-process recover) needs the Archive to p
 fresh-every-run engine) wipes the archive recordings + the snapshot **before** `AeronWal` opens them, so a
 corrupt or stale snapshot can never replay into the engine. It deliberately does **not** touch
 `aeron-dir` (the media driver's live `cnc.dat`); the driver manages that dir itself
-([SpeedEngineConfig.java:174-191](../src/main/java/com/fxoee/engine/speed/SpeedEngineConfig.java#L174)).
+(`SpeedEngineConfig.java:174-191`).
 
 > **Two `SnapshotStore`s and two snapshotters - don't conflate them.** Lane 2 uses
 > `com.fxoee.wal.SnapshotStore` (a JSON file tagged with the Archive position) driven by
@@ -430,7 +430,7 @@ fresh start: wipe transactional state, reset every account to the 10 M seed. Whe
 
 | Environment | Setting | Effect |
 |-------------|---------|--------|
-| **k8s** ([configmap.yaml](../k8s/base/backend/configmap.yaml)) | `FXOEE_RECOVERY_REPLAY_ON_STARTUP: "false"` | off by default; each pod restart resets to a fresh 10 M seed rather than replaying `trade_events` |
+| **k8s** (`configmap.yaml`) | `FXOEE_RECOVERY_REPLAY_ON_STARTUP: "false"` | off by default; each pod restart resets to a fresh 10 M seed rather than replaying `trade_events` |
 | **docker-compose** (`environment:`) | _unset, so `false`_ | same, for a long-lived compose stack |
 | **local dev** (default) | _unset, so `false`_ | fresh start on every `mvn spring-boot:run` / `deploy-all.sh` (which also wipes the Postgres PVC, so there would be nothing to replay anyway) |
 

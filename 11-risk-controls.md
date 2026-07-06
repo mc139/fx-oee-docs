@@ -6,20 +6,20 @@ A pre-trade risk gate that runs on every order before it touches the book. It en
 kill-switch, refuses orders on HALTED pairs, and caps per-order notional, per-account position, and
 per-account gross exposure. All limits are tunable at runtime, no restart needed.
 
-Lives in its own package, [`com.fxoee.risk`](../src/main/java/com/fxoee/risk), deliberately decoupled
+Lives in its own package, `com.fxoee.risk`, deliberately decoupled
 from the matching engine so it could later be lifted into a standalone service.
 
 > **Both engines enforce the same limits.** This doc describes the `default` (lock-based) engine,
 > where the gate is the `RiskService.check` call below. The `speed` engine enforces the identical
-> checks against the same shared [`RiskLimits`](../src/main/java/com/fxoee/risk/RiskLimits.java), but
+> checks against the same shared `RiskLimits`, but
 > inline on its engine thread in fixed-point longs (`SpeedEngine.setRiskGate`,
-> [SpeedMatchingService.java:133](../src/main/java/com/fxoee/engine/speed/SpeedMatchingService.java)),
+> `SpeedMatchingService.java:133`),
 > so the hot path stays zero-alloc. Runtime edits via the REST API / DEBUG panel reach both, because
 > both read the same `RiskLimits` bean.
 
 ## Where it runs
 
-Inside [`MatchingService.submitInternal`](../src/main/java/com/fxoee/engine/MatchingService.java),
+Inside `MatchingService.submitInternal`,
 immediately after the structural check and **before the per-pair book lock**. The full submit
 pipeline, with the risk gate highlighted:
 
@@ -55,7 +55,7 @@ Running pre-lock matters for two reasons:
 2. **Latency.** The gate is pure in-memory arithmetic over a value object; it adds no measurable
    cost (see [Performance](#performance)).
 
-The earlier [`PreTradeValidator`](../src/main/java/com/fxoee/engine/validate/PreTradeValidator.java)
+The earlier `PreTradeValidator`
 (structural + margin/funds reservation) is unchanged and still runs under the book lock. The risk
 gate is an **additional** layer above it, not a replacement.
 
@@ -87,11 +87,11 @@ Notes:
 ## Clean module boundary
 
 The `risk` package imports nothing from `engine`, `matching`, or the persistence layer. The caller
-(`MatchingService`) assembles a plain [`RiskCheckRequest`](../src/main/java/com/fxoee/risk/RiskCheckRequest.java)
+(`MatchingService`) assembles a plain `RiskCheckRequest`
 (pair, account, halt flag, notional, projected net, projected exposure: all serializable types).
-[`RiskService`](../src/main/java/com/fxoee/risk/RiskService.java) is an interface with a single
+`RiskService` is an interface with a single
 in-process implementation,
-[`InProcessRiskService`](../src/main/java/com/fxoee/risk/InProcessRiskService.java).
+`InProcessRiskService`.
 
 ```mermaid
 flowchart LR
@@ -111,7 +111,7 @@ for a REST/gRPC client and no caller changes.
 ## Runtime tuning
 
 Limits seed from `fx.risk.*` on startup and are held in
-[`RiskLimits`](../src/main/java/com/fxoee/risk/RiskLimits.java) as `volatile` fields. Because each
+`RiskLimits` as `volatile` fields. Because each
 field is read independently (no cross-field invariant), every read and write is atomic on its own:
 no lock needed, and a change is visible to the very next order without tearing.
 
@@ -123,12 +123,12 @@ no lock needed, and a change is visible to the very next order without tearing.
 | `PUT /api/risk/limits` | `{killSwitch?, maxOrderNotionalUsd?, maxPositionQty?, maxGrossExposureUsd?}` | Partial update; only non-null fields applied; returns the new state |
 | `POST /api/risk/killswitch/{on}` | `on` = `true`/`false` | Flip the kill-switch |
 
-Served by [`RiskController`](../src/main/java/com/fxoee/api/controller/rest/RiskController.java).
+Served by `RiskController`.
 
 ### DEBUG panel
 
 The trading UI's DEBUG panel has a **RISK** tab
-([`frontend/src/debugpanel.jsx`](../frontend/src/debugpanel.jsx)): the kill-switch toggles instantly
+(`frontend/src/debugpanel.jsx`): the kill-switch toggles instantly
 (it's the safety control); the three numeric limits are edited then **APPLY**'d. Changes are live for
 the next order.
 
@@ -153,7 +153,7 @@ the next order.
 
 Counters are pre-registered for every `(pair × reason)` so the hot path never allocates a tag
 string; cardinality is bounded (`pairs × 5 reasons`) and is **deliberately not** tagged per account.
-The Grafana dashboard ([`docker/grafana/dashboards/fxoee.json`](../docker/grafana/dashboards/fxoee.json))
+The Grafana dashboard (`docker/grafana/dashboards/fxoee.json`)
 carries a **Pre-Trade Risk** row: rejection rate by reason, all-time rejections per reason, and a
 kill-switch state stat. In Prometheus these are `risk_rejected_total{reason,pair}` and
 `risk_killswitch`.
@@ -169,7 +169,7 @@ throughput the dominant cost remains matching itself, not the gate. No part of t
 
 | Suite | Layer |
 |-------|-------|
-| [`RiskLimitsTest`](../src/test/java/com/fxoee/risk/RiskLimitsTest.java) | Holder: seed, enable/disable, atomic setters, view |
-| [`InProcessRiskServiceTest`](../src/test/java/com/fxoee/risk/InProcessRiskServiceTest.java) | Decision logic: each reason, boundaries (`==` accepted, `>` rejected), `\|net\|`, null-skip, precedence, metrics |
-| [`RiskControllerTest`](../src/test/java/com/fxoee/api/controller/rest/RiskControllerTest.java) | REST: GET / partial PUT / kill-switch |
-| [`MatchingServiceRiskGateTest`](../src/test/java/com/fxoee/engine/MatchingServiceRiskGateTest.java) | End-to-end through `submit`, proving rejects happen before any reservation |
+| `RiskLimitsTest` | Holder: seed, enable/disable, atomic setters, view |
+| `InProcessRiskServiceTest` | Decision logic: each reason, boundaries (`==` accepted, `>` rejected), `\|net\|`, null-skip, precedence, metrics |
+| `RiskControllerTest` | REST: GET / partial PUT / kill-switch |
+| `MatchingServiceRiskGateTest` | End-to-end through `submit`, proving rejects happen before any reservation |
