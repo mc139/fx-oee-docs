@@ -1,6 +1,9 @@
 # fx-oee Documentation
 
-_Last updated: 2026-06-21 BST._
+> **Live demo:** **[fxoee.mcieslik.me](https://fxoee.mcieslik.me)** — a running instance (trader terminal + admin console).
+> **Source:** private, available on request. This repository is the architecture and design documentation.
+
+_Last updated: 2026-07-06 BST._
 
 `fx-oee` is an **FX order-execution engine**: a Spring Boot monolith that runs a price-time-priority
 matching engine entirely in the JVM, tracks margin and positions in memory, and projects every fill
