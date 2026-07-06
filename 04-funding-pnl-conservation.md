@@ -13,7 +13,7 @@ and the conservation invariant that ties it all together.
 
 ## Margin: the single funding calculator
 
-Every reserve / hold / release routes through [Margin.usd(pair, qty, price)](../src/main/java/com/fxoee/engine/ledger/Margin.java),
+Every reserve / hold / release routes through `Margin.usd(pair, qty, price)`,
 so the global funding mode changes the whole system in one place.
 
 ```
@@ -31,7 +31,7 @@ requirement  = mode == FULL_NOTIONAL ? notional_usd
 
 ### Funding modes
 
-[FundingMode](../src/main/java/com/fxoee/engine/ledger/FundingMode.java), selected by
+`FundingMode`, selected by
 `fxoee.funding.mode`:
 
 | Mode | Reserves | Leverage |
@@ -47,7 +47,7 @@ requirement  = mode == FULL_NOTIONAL ? notional_usd
 ## P&L conversion to USD
 
 Realized P&L is computed by `PositionBook` when closing lots; the quote-currency P&L is converted to
-USD. The conversion **differs by pair type** ([PositionBook.pnlUsd](../src/main/java/com/fxoee/engine/position/PositionBook.java)):
+USD. The conversion **differs by pair type** (`PositionBook.pnlUsd`):
 
 ```mermaid
 flowchart TD
@@ -92,7 +92,7 @@ example: a 1000-unit USD/JPY fill → fee `1000 × 0.001 = 1.00 USD`
 The default engine above uses `BigDecimal`. The speed engine (`fxoee.engine.mode=speed`) recomputes
 all three money operations (margin requirement, P&L conversion, taker fee) in branch-free `long`
 fixed-point so the hot path never allocates. The scales are pinned in
-[Fixed](../src/main/java/com/fxoee/engine/speed/Fixed.java):
+`Fixed`:
 
 | Quantity | Scale | Example |
 |----------|-------|---------|
@@ -103,13 +103,13 @@ fixed-point so the hot path never allocates. The scales are pinned in
 
 The mirror is exact-by-construction, not a re-derivation:
 
-- [Fixed.marginUsdRaw](../src/main/java/com/fxoee/engine/speed/Fixed.java:130) mirrors `Margin#usd`:
+- `Fixed.marginUsdRaw` mirrors `Margin#usd`:
   notional (USD-base = qty, else qty × price), then `× marginRate` in `MARGIN` mode, then
   **cent-rounded** (`roundToCent`, scale 2, HALF_UP) like the default engine's `setScale(2, HALF_UP)`.
-- [Fixed.pnlUsdRaw](../src/main/java/com/fxoee/engine/speed/Fixed.java:142) mirrors
+- `Fixed.pnlUsdRaw` mirrors
   `PositionBook.pnlUsd`: USD-quote pairs are already USD; USD-base pairs divide by close price (the
   same ÷close logic, same defensive `closePrice <= 0` branch).
-- [Fixed.takerFeeRaw](../src/main/java/com/fxoee/engine/speed/Fixed.java:153) mirrors
+- `Fixed.takerFeeRaw` mirrors
   `computeTakerFee`: notional `/ 1000` (= 0.1%, `TAKER_FEE_DIVISOR`) at money scale, HALF_UP.
 
 Rounding is HALF_UP throughout. Because both engines double-round independently, they may differ by

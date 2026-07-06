@@ -11,11 +11,11 @@ to durable storage through a replayable log. It ships **two matching engines** a
 lanes**, picked at boot.
 
 This documentation is written **from the code**: every claim below maps to a class, method, or
-config key you can open. File references are clickable (`path:line`).
+config key. File references cite the type and line (`path:line`) in the private source.
 
 ## Two engine modes, two durability lanes
 
-The boot-time switch is `fxoee.engine.mode` ([EngineConfig.java:71](../src/main/java/com/fxoee/engine/EngineConfig.java)
+The boot-time switch is `fxoee.engine.mode` (`EngineConfig.java:71`
 defaults to `default` via `matchIfMissing=true`; `performance.properties:31` and the local profile set `speed`):
 
 | Mode | Matching core | Durability lane |
@@ -144,7 +144,7 @@ math, so they cannot drift from the engine. See [Event sourcing & persistence](0
 
 ## The seven currency pairs
 
-Defined in [CurrencyPair.java](../src/main/java/com/fxoee/domain/enums/CurrencyPair.java). All share
+Defined in `CurrencyPair.java`. All share
 margin rate `0.05` (20:1) and min lot size `1`.
 
 | Pair | Base | Quote | USD-base? | Tick |

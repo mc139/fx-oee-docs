@@ -2,12 +2,12 @@
 
 _Last updated: 2026-06-27 BST._
 
-Every runtime knob is resolved by [application.yml](../src/main/resources/application.yml) or
-[performance.properties](../src/main/resources/performance.properties) (imported `optional:` by
+Every runtime knob is resolved by `application.yml` or
+`performance.properties` (imported `optional:` by
 application.yml), either from an environment variable or from a default baked into the file (or, for a
 few keys, a `@Value` default in the code). In Minikube they're set by
-[k8s/base/backend/configmap.yaml](../k8s/base/backend/configmap.yaml) +
-[secret.yaml](../k8s/base/backend/secret.yaml); in compose by the `environment:` blocks.
+`k8s/base/backend/configmap.yaml` +
+`secret.yaml`; in compose by the `environment:` blocks.
 
 > **Where defaults differ:** several keys carry one default in the YAML / properties file and a
 > different one in the code's `@Value` fallback (used only when the key is deleted entirely). Both are
@@ -41,7 +41,7 @@ Flyway runs migrations on boot (`spring.flyway.enabled=true`, `classpath:db/migr
 | `kafka.enabled` | `KAFKA_ENABLED` | `true` (top-level producer flag) | ✅ gates producer, `FillQueue`, `PersistenceWorker` ([doc 05](05-event-sourcing-persistence.md)) |
 | `spring.kafka.consumer.enabled` | `KAFKA_ENABLED` | `false` | ✅ gates the consumer side (`FillConsumer` / `SnapshotConsumer`) separately from the producer |
 
-The producer is tuned for the `PersistenceWorker`'s pipelined async sends ([application.yml:26-45](../src/main/resources/application.yml)):
+The producer is tuned for the `PersistenceWorker`'s pipelined async sends (`application.yml:26-45`):
 `acks=all`, `enable.idempotence=true`, `retries=5`, `request.timeout.ms=5000`, `delivery.timeout.ms=30000`,
 `max.in.flight.requests.per.connection=5`, `batch-size=262144`, `compression-type=zstd`,
 `buffer-memory=67108864` (64 MiB), `linger.ms=20`. The worker fires sends without blocking on acks
@@ -62,7 +62,7 @@ and [speed-engine.md](speed-engine.md)). `performance.properties` (imported `opt
 `application.yml`) sets `engine.mode=speed`. Note: the speed engine has its **own** single-writer
 Disruptor command ring (sized by `fxoee.engine.speed.ring-size`), which is separate from the `FillQueue`
 selected by `fxoee.queue.type`; `performance.properties` actually leaves `queue.type=agrona`
-([performance.properties:10,31](../src/main/resources/performance.properties)).
+(`performance.properties:10,31`).
 
 | Key | Env var | Default | Status |
 |-----|---------|---------|--------|
@@ -70,7 +70,7 @@ selected by `fxoee.queue.type`; `performance.properties` actually leaves `queue.
 | `fxoee.queue.type` | `FXOEE_QUEUE_TYPE` | `agrona` (key not in base yml; `matchIfMissing`) | ✅ `FillQueue` impl between the engine and `PersistenceWorker`: `agrona` (unbounded Agrona MPSC, never rejects), `clq` (`ConcurrentLinkedQueue`, sheds at high-water), or `disruptor` ring (`DisruptorFillQueue`) |
 | `fxoee.funding.mode` | none | `FULL_NOTIONAL` | ✅ `MARGIN` (leveraged) vs `FULL_NOTIONAL` ([doc 04](04-funding-pnl-conservation.md)) |
 | `fxoee.engine.authoritative` | none | `true` | ✅ WebSocket + debug APIs read in-JVM `MatchingService` state |
-| `fxoee.recovery.replay-on-startup` | `FXOEE_RECOVERY_REPLAY_ON_STARTUP` | `false` | ✅ when true, `AccountBootstrapper` rebuilds the engine from `trade_events` (warm restart) instead of wiping to a fresh 10M balance. `false` in k8s ([configmap](../k8s/base/backend/configmap.yaml)) and in local dev, where `deploy-all.sh` wipes the Postgres PVC each run anyway so an empty log makes warm restart a no-op. See [doc 05](05-event-sourcing-persistence.md#warm-restart-recovery-engine-replay). |
+| `fxoee.recovery.replay-on-startup` | `FXOEE_RECOVERY_REPLAY_ON_STARTUP` | `false` | ✅ when true, `AccountBootstrapper` rebuilds the engine from `trade_events` (warm restart) instead of wiping to a fresh 10M balance. `false` in k8s (`configmap`) and in local dev, where `deploy-all.sh` wipes the Postgres PVC each run anyway so an empty log makes warm restart a no-op. See [doc 05](05-event-sourcing-persistence.md#warm-restart-recovery-engine-replay). |
 | `fxoee.recovery.snapshots.enabled` | `FXOEE_RECOVERY_SNAPSHOTS_ENABLED` | `false` | ✅ Phase 4 bounded warm restart (Kafka path): `EngineSnapshotter` publishes per-account state to the log-compacted `engine.snapshots` topic and replay loads the latest snapshot per account, then replays only the `trade_events` tail. Requires `kafka.enabled=true`; opportunistic, off by default ([ADR 0006](adr/0006-engine-snapshots-bounded-restart.md)) |
 | `fxoee.recovery.snapshots.interval-ms` | `FXOEE_RECOVERY_SNAPSHOTS_INTERVAL_MS` | `30000` | ✅ how often the snapshotter attempts a consistent-cut capture |
 | `fxoee.mock-market.enabled` | `MOCK_MARKET_ENABLED` | `false` | ✅ `MockMarketMaker` injects house bid/ask depth every 500 ms using an OU+GARCH price model |
@@ -81,15 +81,15 @@ selected by `fxoee.queue.type`; `performance.properties` actually leaves `queue.
 ## Speed engine (`fxoee.engine.speed.*`)
 
 Active only when `fxoee.engine.mode=speed`. These keys live in
-[performance.properties](../src/main/resources/performance.properties) and bind via
-[SpeedEngineConfig](../src/main/java/com/fxoee/engine/speed/SpeedEngineConfig.java). They are no-ops in
+`performance.properties` and bind via
+`SpeedEngineConfig`. They are no-ops in
 `default` mode. Note this command ring (the single-writer engine ring) is separate from the `FillQueue`
 selected by `fxoee.queue.type` below.
 
 | Key | Env var | Default | Status |
 |-----|---------|---------|--------|
-| `fxoee.engine.speed.ring-size` | `FXOEE_ENGINE_SPEED_RING_SIZE` | `65536` (code `@Value` + properties; auto-rounded UP to a power of 2, `<=0` → 65536) | ✅ multi-producer command ring capacity (REST + simulator + book views share it); bigger = more burst headroom, smaller = tighter L1/L2 locality ([SpeedEngineConfig.java:66](../src/main/java/com/fxoee/engine/speed/SpeedEngineConfig.java)) |
-| `fxoee.engine.speed.book-map-capacity` | `FXOEE_ENGINE_SPEED_BOOK_MAP_CAPACITY` | `65536` (code `@Value` + properties) | ✅ Agrona open-addressing map capacity per book side; size to peak resting orders per pair so books stop resizing ([SpeedEngineConfig.java:64](../src/main/java/com/fxoee/engine/speed/SpeedEngineConfig.java)) |
+| `fxoee.engine.speed.ring-size` | `FXOEE_ENGINE_SPEED_RING_SIZE` | `65536` (code `@Value` + properties; auto-rounded UP to a power of 2, `<=0` → 65536) | ✅ multi-producer command ring capacity (REST + simulator + book views share it); bigger = more burst headroom, smaller = tighter L1/L2 locality (`SpeedEngineConfig.java:66`) |
+| `fxoee.engine.speed.book-map-capacity` | `FXOEE_ENGINE_SPEED_BOOK_MAP_CAPACITY` | `65536` (code `@Value` + properties) | ✅ Agrona open-addressing map capacity per book side; size to peak resting orders per pair so books stop resizing (`SpeedEngineConfig.java:64`) |
 | `fxoee.engine.speed.cpu` | `FXOEE_ENGINE_SPEED_CPU` | code `@Value` `-1` (= let the OS schedule); **`performance.properties` sets `2`** | ✅ pins the single-writer engine thread to this core (Linux/OpenHFT affinity only; no-op on macOS/unsupported) |
 | `fxoee.engine.speed.wait-strategy` | `FXOEE_ENGINE_SPEED_WAIT_STRATEGY` | `busy-spin` | ✅ Disruptor command-ring wait strategy for the engine thread |
 
@@ -97,12 +97,12 @@ selected by `fxoee.queue.type` below.
 
 The async fill hand-off between the engine and the `PersistenceWorker` DB writer (Kafka lane). Only
 wired when `kafka.enabled=true`; otherwise the engine runs fully in-memory and these are inert. Keys
-live in [performance.properties](../src/main/resources/performance.properties).
+live in `performance.properties`.
 
 | Key | Env var | Default | Status |
 |-----|---------|---------|--------|
-| `fxoee.disruptor.ring-buffer-size` | `FXOEE_DISRUPTOR_RING_BUFFER_SIZE` | code `@Value` `131072`; **`performance.properties` sets `1048576`**. Must be a power of 2 | ✅ ring capacity for the `disruptor` `FillQueue` path ([DisruptorFillQueue](../src/main/java/com/fxoee/engine/DisruptorFillQueue.java)); inert unless `fxoee.queue.type=disruptor` |
-| `fxoee.persistence.batch-max` | `FXOEE_PERSISTENCE_BATCH_MAX` | `512` (code `@Value` + properties) | ✅ max `PendingFill`s drained per `PersistenceWorker` batch; higher = fewer DB round-trips, higher tail latency ([PersistenceWorker.java:68](../src/main/java/com/fxoee/engine/PersistenceWorker.java)) |
+| `fxoee.disruptor.ring-buffer-size` | `FXOEE_DISRUPTOR_RING_BUFFER_SIZE` | code `@Value` `131072`; **`performance.properties` sets `1048576`**. Must be a power of 2 | ✅ ring capacity for the `disruptor` `FillQueue` path (`DisruptorFillQueue`); inert unless `fxoee.queue.type=disruptor` |
+| `fxoee.persistence.batch-max` | `FXOEE_PERSISTENCE_BATCH_MAX` | `512` (code `@Value` + properties) | ✅ max `PendingFill`s drained per `PersistenceWorker` batch; higher = fewer DB round-trips, higher tail latency (`PersistenceWorker.java:68`) |
 
 ## Sample data (startup order ladder)
 
@@ -140,7 +140,7 @@ flowchart LR
     PROJ -. async hand-off .-> BC["WS broadcaster<br/>(bounded SPSC, Fix A)"]
 ```
 
-**Everything below is OFF by default** ([application.yml:108-171](../src/main/resources/application.yml)).
+**Everything below is OFF by default** (`application.yml:108-171`).
 The lane is wired up by the `--wal` dev script; production keeps its durable state, the local profile
 runs fresh-every-boot. The telemetry for this whole pipeline is `GET /api/debug/pipeline-stats`
 (see [doc 06](06-api-reference.md#orderbookdebugcontroller-apidebug)).
@@ -167,7 +167,7 @@ For a **true DB-off durable lane**: `persist-archive=true`, `snapshot.enabled=tr
 
 | Key | Env var | Default | Status |
 |-----|---------|---------|--------|
-| `fxoee.wal.questdb.enabled` | `FXOEE_WAL_QUESTDB_ENABLED` | `false` | ✅ projector also writes each trade to QuestDB over ILP for SQL history/analytics. Needs a running QuestDB ([k8s/base/questdb/questdb.yaml](../k8s/base/questdb/questdb.yaml) or docker); connects lazily so boot order doesn't matter |
+| `fxoee.wal.questdb.enabled` | `FXOEE_WAL_QUESTDB_ENABLED` | `false` | ✅ projector also writes each trade to QuestDB over ILP for SQL history/analytics. Needs a running QuestDB (`k8s/base/questdb/questdb.yaml` or docker); connects lazily so boot order doesn't matter |
 | `fxoee.wal.questdb.ilp` | `FXOEE_WAL_QUESTDB_ILP` | `http::addr=localhost:9000;` | ✅ QuestDB ILP client connection string |
 | `fxoee.wal.questdb.ttl` | `FXOEE_WAL_QUESTDB_TTL` | `30d` | ✅ retention window for the `trades` tape (QuestDB duration, e.g. `30d`, `12h`, `4w`). QuestDB drops whole partitions older than this on its own (`PARTITION BY DAY`), so the tape stays bounded. Postgres + the Aeron WAL remain the durable source of truth. Set blank or `0` to keep everything (unbounded) |
 

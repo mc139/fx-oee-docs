@@ -7,7 +7,7 @@ FIX gateway built on **quickfix-j 3.0.1** (the FIX 4.4 message set), **v1 implem
 `OrderCancelReject (35=9)`. Orders run through the same `OrderService.placeOrder` / `cancelOrder` path
 as the REST API, so matching, risk, and accounting behave identically.
 
-The library comes from two Maven artifacts ([pom.xml](../pom.xml)): `org.quickfixj:quickfixj-core` and
+The library comes from two Maven artifacts (`pom.xml`): `org.quickfixj:quickfixj-core` and
 `org.quickfixj:quickfixj-messages-fix44`, both at version `3.0.1`. QuickFIX/J owns the session layer
 (Logon, Heartbeat, sequence numbers); the application logic lives in `FixApplication`.
 

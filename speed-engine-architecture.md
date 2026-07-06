@@ -4,7 +4,7 @@ _Last updated: 2026-06-21 BST._
 
 This document is a **visual map** of how the speed engine runs: which threads exist, what each one owns, how commands flow through the Disruptor ring, and where work happens. It complements the deeper semantics guide in [speed-engine.md](speed-engine.md).
 
-Enable speed mode with `fxoee.engine.mode=speed` (or env `FXOEE_ENGINE_MODE=speed`). It is the active engine here: [performance.properties](../src/main/resources/performance.properties) (imported via `optional:classpath:performance.properties` in [application.yml](../src/main/resources/application.yml)) sets `fxoee.engine.mode=speed`, and the local profile defaults to it (`mode: ${FXOEE_ENGINE_MODE:speed}` in [application-local.yml](../src/main/resources/application-local.yml)). Spring wires everything in [SpeedEngineConfig.java](../src/main/java/com/fxoee/engine/speed/SpeedEngineConfig.java).
+Enable speed mode with `fxoee.engine.mode=speed` (or env `FXOEE_ENGINE_MODE=speed`). It is the active engine here: `performance.properties` (imported via `optional:classpath:performance.properties` in `application.yml`) sets `fxoee.engine.mode=speed`, and the local profile defaults to it (`mode: ${FXOEE_ENGINE_MODE:speed}` in `application-local.yml`). Spring wires everything in `SpeedEngineConfig.java`.
 
 ---
 
@@ -16,7 +16,7 @@ Enable speed mode with `fxoee.engine.mode=speed` (or env `FXOEE_ENGINE_MODE=spee
 | **Multi producer** | Any number of request threads can publish commands into the ring at once |
 | **Synchronous submit** | Each caller blocks on its own `ResultBuffer` until the engine answers |
 | **Edge conversion** | `BigDecimal` only on request threads; the engine thread uses fixed-point `long`s |
-| **LMAX pattern** | The same LMAX Disruptor 4.0.0 library that the optional [`DisruptorFillQueue`](../src/main/java/com/fxoee/engine/DisruptorFillQueue.java) can use downstream, but here it carries commands *into* the engine. The engine command ring is always a Disruptor; the [fill queue](05-event-sourcing-persistence.md) defaults to Agrona |
+| **LMAX pattern** | The same LMAX Disruptor 4.0.0 library that the optional `DisruptorFillQueue` can use downstream, but here it carries commands *into* the engine. The engine command ring is always a Disruptor; the [fill queue](05-event-sourcing-persistence.md) defaults to Agrona |
 
 ---
 
@@ -141,18 +141,18 @@ flowchart LR
 
 | Class | Package | Thread | Responsibility |
 |-------|---------|--------|----------------|
-| [SpeedMatchingService](../src/main/java/com/fxoee/engine/speed/SpeedMatchingService.java) | `engine.speed` | Request | `TradingEngine` facade: validation, convert, publish, materialise reports |
-| [EngineClient](../src/main/java/com/fxoee/engine/speed/EngineClient.java) | `engine.speed` | Request | ThreadLocal `ResultBuffer`, `publishAndWait`, `exec` |
-| [SpeedEngine](../src/main/java/com/fxoee/engine/speed/SpeedEngine.java) | `engine.speed` | **Engine** | Disruptor consumer, dispatch, match, funds, reconcile |
-| [EngineSlot](../src/main/java/com/fxoee/engine/speed/EngineSlot.java) | `engine.speed` | Both | Ring event: command type + primitive inputs |
-| [ResultBuffer](../src/main/java/com/fxoee/engine/speed/ResultBuffer.java) | `engine.speed` | Both | Caller-owned result arrays + done handshake |
-| [SpeedBook](../src/main/java/com/fxoee/engine/speed/SpeedBook.java) | `engine.speed` | **Engine** | Long-native order book (pooled nodes) |
-| [SpeedPositions](../src/main/java/com/fxoee/engine/speed/SpeedPositions.java) | `engine.speed` | **Engine** | FIFO lots, net qty, held margin |
-| [SpeedLedger](../src/main/java/com/fxoee/engine/speed/SpeedLedger.java) | `engine.speed` | **Engine** | Cash, reserved, per-pair pending margin |
-| [AccountRegistry](../src/main/java/com/fxoee/engine/speed/AccountRegistry.java) | `engine.speed` | **Engine** | `UUID` → dense `int` index |
-| [Fixed](../src/main/java/com/fxoee/engine/speed/Fixed.java) | `engine.speed` | Both | Scale constants, `long` ↔ `BigDecimal` conversion |
-| [SpeedOrderBookView](../src/main/java/com/fxoee/engine/speed/SpeedOrderBookView.java) | `engine.speed` | Request | `OrderBook` API over engine thread reads |
-| [SpeedMatchingEngine](../src/main/java/com/fxoee/engine/speed/SpeedMatchingEngine.java) | `engine.speed` | Request | Book-only match for mock quote injection |
+| `SpeedMatchingService` | `engine.speed` | Request | `TradingEngine` facade: validation, convert, publish, materialise reports |
+| `EngineClient` | `engine.speed` | Request | ThreadLocal `ResultBuffer`, `publishAndWait`, `exec` |
+| `SpeedEngine` | `engine.speed` | **Engine** | Disruptor consumer, dispatch, match, funds, reconcile |
+| `EngineSlot` | `engine.speed` | Both | Ring event: command type + primitive inputs |
+| `ResultBuffer` | `engine.speed` | Both | Caller-owned result arrays + done handshake |
+| `SpeedBook` | `engine.speed` | **Engine** | Long-native order book (pooled nodes) |
+| `SpeedPositions` | `engine.speed` | **Engine** | FIFO lots, net qty, held margin |
+| `SpeedLedger` | `engine.speed` | **Engine** | Cash, reserved, per-pair pending margin |
+| `AccountRegistry` | `engine.speed` | **Engine** | `UUID` → dense `int` index |
+| `Fixed` | `engine.speed` | Both | Scale constants, `long` ↔ `BigDecimal` conversion |
+| `SpeedOrderBookView` | `engine.speed` | Request | `OrderBook` API over engine thread reads |
+| `SpeedMatchingEngine` | `engine.speed` | Request | Book-only match for mock quote injection |
 
 ---
 
@@ -272,7 +272,7 @@ Every caller goes through `EngineClient.command()` / `publishAndWait()`, both of
 
 ## Result handshake (request ↔ engine)
 
-Each submitting thread owns one reusable [ResultBuffer](../src/main/java/com/fxoee/engine/speed/ResultBuffer.java). Results never travel in the ring slot, only primitives and refs written into the caller's buffer.
+Each submitting thread owns one reusable `ResultBuffer`. Results never travel in the ring slot, only primitives and refs written into the caller's buffer.
 
 ```mermaid
 stateDiagram-v2
@@ -309,7 +309,7 @@ Under many concurrent submitters, parked threads release cores so `speed-engine`
 
 ## State owned by the engine thread
 
-All of this lives in [SpeedEngine](../src/main/java/com/fxoee/engine/speed/SpeedEngine.java). **No other thread may mutate it** (reads go through `EXEC` or volatile top-of-book mirrors).
+All of this lives in `SpeedEngine`. **No other thread may mutate it** (reads go through `EXEC` or volatile top-of-book mirrors).
 
 ```mermaid
 flowchart TB
@@ -520,16 +520,16 @@ flowchart LR
 | QuestDB tape | `AeronWalProjector` poll thread | When `fxoee.wal.questdb.enabled`, writes the QuestDB history tape over ILP, flushing on the poll thread because the ILP `Sender` is not thread-safe | Yes (off hot path) |
 | Postgres balances | `wal-db-projector` | Periodically (default 200ms) reads a durable cursor, replays the Archive tail, applies per-account legs in batches via `FillBatchRepository`, idempotent through a `fill_dedup` guard; the cursor advances only after a batch commits, so a crash re-replays at most one batch | Yes (off hot path) |
 
-- **Engine-stamped fill sequence.** Every fill carries a monotonic `fillSeq` stamped on the engine thread ([SpeedEngine.java:364](../src/main/java/com/fxoee/engine/speed/SpeedEngine.java)). It is the WAL ordering key and the source of the deterministic, replay-stable trade id `WalIds.tradeId(seq) = UUID(0x54, seq)` (lot ids use `UUID(0, seq)`, a disjoint range). No random UUIDs are minted on the hot path.
-- **Batched flush.** `onEvent` flushes the pending WAL batch when the Disruptor signals end-of-batch ([SpeedEngine.java:239](../src/main/java/com/fxoee/engine/speed/SpeedEngine.java) calls `flushWal`, inside the `try` so a stall surfaces as `INTERNAL_ERROR`; the buffering lives in [WalPublisher.java](../src/main/java/com/fxoee/wal/WalPublisher.java)), so per-message recorder overhead is paid once per Disruptor batch, not per fill.
+- **Engine-stamped fill sequence.** Every fill carries a monotonic `fillSeq` stamped on the engine thread (`SpeedEngine.java:364`). It is the WAL ordering key and the source of the deterministic, replay-stable trade id `WalIds.tradeId(seq) = UUID(0x54, seq)` (lot ids use `UUID(0, seq)`, a disjoint range). No random UUIDs are minted on the hot path.
+- **Batched flush.** `onEvent` flushes the pending WAL batch when the Disruptor signals end-of-batch (`SpeedEngine.java:239` calls `flushWal`, inside the `try` so a stall surfaces as `INTERNAL_ERROR`; the buffering lives in `WalPublisher.java`), so per-message recorder overhead is paid once per Disruptor batch, not per fill.
 
 ### Ingress shed under WAL lag (Fix B)
 
-A fill burst on an accepted order must always fit above the back-pressure trip point of the IPC term buffer. So a **NEW** order is rejected `OVERLOADED` **before any state mutation** when the WAL lag (`aeronWal.walLagBytes()`) exceeds `fxoee.wal.aeron.lag-threshold-bytes` (default 48 MiB, capped to 90% of the term buffer at wiring time) ([SpeedMatchingService.java:177](../src/main/java/com/fxoee/engine/speed/SpeedMatchingService.java), [SpeedEngineConfig.java:136](../src/main/java/com/fxoee/engine/speed/SpeedEngineConfig.java)). The lag read is a lock-free counter load, cheap from every request thread; the raw load-generator lane gates on the same check.
+A fill burst on an accepted order must always fit above the back-pressure trip point of the IPC term buffer. So a **NEW** order is rejected `OVERLOADED` **before any state mutation** when the WAL lag (`aeronWal.walLagBytes()`) exceeds `fxoee.wal.aeron.lag-threshold-bytes` (default 48 MiB, capped to 90% of the term buffer at wiring time) (`SpeedMatchingService.java:177`, `SpeedEngineConfig.java:136`). The lag read is a lock-free counter load, cheap from every request thread; the raw load-generator lane gates on the same check.
 
 ### Bounded restart over the Archive (Phase E snapshots)
 
-[Snapshotter](../src/main/java/com/fxoee/wal/Snapshotter.java) captures a consistent whole-engine snapshot in **one engine-thread command** (`SpeedMatchingService.captureSnapshot`, [SpeedMatchingService.java:742](../src/main/java/com/fxoee/engine/speed/SpeedMatchingService.java)): the live WAL recording position and fill-sequence high-water, plus every account's cash, realized P&L and open lots. `walPosition()` flushes the pending WAL batch first so the cut covers every already-applied fill. Recovery loads the snapshot and replays only the **tail** of the Archive past that position, then raises `fillSeq` so resumed trading never re-issues a deterministic trade id. Restart cost is bounded by the trades since the last snapshot, not the whole history. Opt-in via `fxoee.wal.snapshot.enabled`; surviving a real process restart also needs `persist-archive=true` and a stable snapshot path.
+`Snapshotter` captures a consistent whole-engine snapshot in **one engine-thread command** (`SpeedMatchingService.captureSnapshot`, `SpeedMatchingService.java:742`): the live WAL recording position and fill-sequence high-water, plus every account's cash, realized P&L and open lots. `walPosition()` flushes the pending WAL batch first so the cut covers every already-applied fill. Recovery loads the snapshot and replays only the **tail** of the Archive past that position, then raises `fillSeq` so resumed trading never re-issues a deterministic trade id. Restart cost is bounded by the trades since the last snapshot, not the whole history. Opt-in via `fxoee.wal.snapshot.enabled`; surviving a real process restart also needs `persist-archive=true` and a stable snapshot path.
 
 ---
 
@@ -543,9 +543,9 @@ A fill burst on an accepted order must always fit above the back-pressure trip p
 | `fxoee.engine.speed.book-map-capacity` | `65536` | `65536` | Agrona open-addressing map capacity per `SpeedBook` (five maps per book) |
 | `fxoee.engine.speed.cpu` | `-1` | `2` | CPU core to pin `speed-engine` via OpenHFT Affinity (`-1` = off; Linux only, no-op elsewhere) |
 
-The defaults come from the `@Value` fallbacks in [SpeedEngineConfig](../src/main/java/com/fxoee/engine/speed/SpeedEngineConfig.java); `performance.properties` ([src/main/resources/performance.properties](../src/main/resources/performance.properties), loaded via an `optional:` import) overrides them.
+The defaults come from the `@Value` fallbacks in `SpeedEngineConfig`; `performance.properties` (`src/main/resources/performance.properties`, loaded via an `optional:` import) overrides them.
 
-The **command** ring is bound from `fxoee.engine.speed.ring-size` ([SpeedEngineConfig.java:66](../src/main/java/com/fxoee/engine/speed/SpeedEngineConfig.java)), default `65536` slots (~0.4 s of burst headroom at 150k orders/s), rounded up to a power of two. It is a **different** ring from the persistence-side `fxoee.disruptor.ring-buffer-size` (set to `1048576` in `performance.properties`, code default `131072`), which sizes the optional [`DisruptorFillQueue`](../src/main/java/com/fxoee/engine/DisruptorFillQueue.java) between the facade and `PersistenceWorker`. The boot-default `FillQueue` is the unbounded `agrona` queue, not the Disruptor (`fxoee.queue.type`).
+The **command** ring is bound from `fxoee.engine.speed.ring-size` (`SpeedEngineConfig.java:66`), default `65536` slots (~0.4 s of burst headroom at 150k orders/s), rounded up to a power of two. It is a **different** ring from the persistence-side `fxoee.disruptor.ring-buffer-size` (set to `1048576` in `performance.properties`, code default `131072`), which sizes the optional `DisruptorFillQueue` between the facade and `PersistenceWorker`. The boot-default `FillQueue` is the unbounded `agrona` queue, not the Disruptor (`fxoee.queue.type`).
 
 ---
 

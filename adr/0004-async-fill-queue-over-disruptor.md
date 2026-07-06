@@ -5,14 +5,14 @@ _Last updated: 2026-06-20 BST._
 **Status:** Accepted (interim implementation) · **superseded by [ADR 0005](0005-disruptor-adoption.md)**
 
 > **Historical record.** This ADR captured the interim async hand-off (a `ConcurrentLinkedQueue`)
-> and named the LMAX Disruptor (`com.lmax:disruptor:4.0.0`, declared in [pom.xml](../../pom.xml)) as
+> and named the LMAX Disruptor (`com.lmax:disruptor:4.0.0`, declared in `pom.xml`) as
 > the planned target. The migration has since landed: [ADR 0005](0005-disruptor-adoption.md) adopts
 > the Disruptor for both the speed-engine command ring and (as
-> [`DisruptorFillQueue`](../../src/main/java/com/fxoee/engine/DisruptorFillQueue.java)) the fill
+> `DisruptorFillQueue`) the fill
 > hand-off, and supersedes this decision. The `ConcurrentLinkedQueue` variant survives as
-> [`DefaultFillQueue`](../../src/main/java/com/fxoee/engine/DefaultFillQueue.java)
+> `DefaultFillQueue`
 > (`fxoee.queue.type=clq`); the boot default is now the unbounded
-> [`AgronaFillQueue`](../../src/main/java/com/fxoee/engine/AgronaFillQueue.java). Read this only for
+> `AgronaFillQueue`. Read this only for
 > the original interim context.
 
 ## Context
@@ -33,7 +33,7 @@ To unblock the rest of the system (durable log, projections, back-pressure) befo
 
 ## Decision
 
-**Now (interim):** implement the hand-off as [`FillQueue`](../../src/main/java/com/fxoee/engine/FillQueue.java),
+**Now (interim):** implement the hand-off as `FillQueue`,
 an unbounded `ConcurrentLinkedQueue<PendingFill>` with an `AtomicInteger` depth counter:
 
 - `enqueue` is a wait-free `offer` from the matching thread; never blocks, never rejects.
@@ -70,6 +70,6 @@ hand-off is shown to be hot enough to justify it. The dependency is already on t
 ## Follow-up
 
 _Done._ The Disruptor ring buffer was wired behind the `FillQueue` interface as
-[`DisruptorFillQueue`](../../src/main/java/com/fxoee/engine/DisruptorFillQueue.java) (event type still
+`DisruptorFillQueue` (event type still
 `FillEvent`/`PendingFill`, batched-drain + re-enqueue contract preserved). See
 [ADR 0005](0005-disruptor-adoption.md) for the decision that closed this out.
