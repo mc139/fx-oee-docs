@@ -1,6 +1,6 @@
 # 01 - Architecture
 
-_Last updated: 2026-06-21 BST._
+_Last updated: 2026-10-29 GMT._
 
 ## Process layout
 
@@ -59,6 +59,11 @@ flowchart LR
     L2 --> QDB
     jvm --> PROM
 ```
+
+A detailed component view (security chain, risk gate, both engines with every durability follower,
+external systems) is kept as an editable draw.io file:
+[`diagrams/architecture.drawio`](diagrams/architecture.drawio). Open it in draw.io / diagrams.net;
+its labels are in Polish.
 
 ## Bean wiring
 
